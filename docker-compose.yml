@@ -1,0 +1,73 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-opsforge}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-opsforge}
+      POSTGRES_DB: ${POSTGRES_DB:-opsforge}
+    volumes:
+      - opsforge-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-opsforge} -d ${POSTGRES_DB:-opsforge}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - opsforge
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - opsforge-redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - opsforge
+
+  backend:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-opsforge}:${POSTGRES_PASSWORD:-opsforge}@postgres:5432/${POSTGRES_DB:-opsforge}
+      REDIS_URL: redis://redis:6379/0
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost}
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    expose:
+      - "8000"
+    networks:
+      - opsforge
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_URL: /api
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "${OPSFORGE_HTTP_PORT:-80}:80"
+    networks:
+      - opsforge
+
+volumes:
+  opsforge-postgres:
+  opsforge-redis:
+
+networks:
+  opsforge:
+    driver: bridge
