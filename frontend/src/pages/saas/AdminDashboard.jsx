@@ -1,27 +1,19 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
-  AlertTriangle,
   Boxes,
   ChevronRight,
   Database,
-  FileCode2,
   FolderGit2,
   Gauge,
-  GitBranch,
   HeartPulse,
-  Image,
   LayoutDashboard,
-  Lock,
   MonitorDot,
   Rocket,
   Search,
-  Server,
   Settings,
   ShieldCheck,
-  TerminalSquare,
   Users,
-  Zap,
 } from 'lucide-react'
 import { Button } from '../../components/ui/Button'
 import { Badge } from '../../components/ui/Badge'
@@ -30,19 +22,10 @@ import { api, apiErrorMessage, unwrap } from '../../services/api'
 const sidebarItems = [
   [LayoutDashboard, 'Overview', '/admin/dashboard', true],
   [Boxes, 'Projects', '/admin/generated-projects'],
-  [FileCode2, 'AI Generator', '/generate'],
-  [GitBranch, 'Repositories', '/admin/generated-projects'],
-  [Image, 'Images', '/admin/system-usage'],
-  [Rocket, 'Deployments', '/admin/system-usage'],
-  [GitBranch, 'GitOps', '/admin/system-usage'],
-  [Server, 'Kubernetes', '/admin/system-usage'],
   [Gauge, 'Monitoring', '/admin/system-usage'],
-  [TerminalSquare, 'Logs', '/admin/system-usage'],
-  [AlertTriangle, 'Incidents', '/admin/system-usage'],
-  [Lock, 'Security', '/admin/system-usage'],
-  [Zap, 'Self-Healing', '/admin/system-usage'],
-  [Settings, 'Settings', '/profile'],
   [Users, 'Users', '/admin/user-management'],
+  [ShieldCheck, 'Audit Logs', '/admin/audit-logs'],
+  [Settings, 'Profile', '/profile'],
 ]
 
 const healthBars = [42, 78, 64, 96, 96, 86, 96]
@@ -167,7 +150,6 @@ export default function AdminDashboard() {
                 <Search className="h-4 w-4 shrink-0" />
                 <span className="truncate">Search projects, users, activity...</span>
               </div>
-              <Link to="/generate"><Button size="sm">New Project</Button></Link>
               <Badge tone="purple">Biraj · Admin</Badge>
             </div>
           </header>
@@ -176,7 +158,7 @@ export default function AdminDashboard() {
             <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
               <div>
                 <h2 className="text-3xl font-bold text-white">Platform Overview</h2>
-                <p className="mt-2 text-sm text-slate-400">Generate, monitor, secure, and manage DevOps projects from one control center.</p>
+                <p className="mt-2 text-sm text-slate-400">View user projects, manage accounts, review usage, and audit platform activity.</p>
               </div>
               <Badge tone="green">All systems operational</Badge>
             </div>
@@ -186,7 +168,7 @@ export default function AdminDashboard() {
             <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
               <StatCard icon={FolderGit2} label="Total Projects" value={stats?.total_projects ?? 0} detail={`${activeTypes} active project types`} />
               <StatCard icon={Rocket} label="Active Users" value={stats?.active_users ?? activeUsers} detail={`${stats?.total_users ?? users.length} total registered users`} tone="green" />
-              <StatCard icon={AlertTriangle} label="Open Incidents" value="0" detail="No high severity alerts" tone="amber" />
+              <StatCard icon={Gauge} label="System Usage" value={stats?.total_projects ?? 0} detail="Tracked generated projects" tone="amber" />
               <StatCard icon={ShieldCheck} label="Downloads" value={stats?.total_downloads ?? 0} detail="ZIP and PDF exports" tone="rose" />
             </div>
 
@@ -222,9 +204,9 @@ export default function AdminDashboard() {
                 <h3 className="text-lg font-semibold text-white">Quick Actions</h3>
                 <div className="mt-4 space-y-2">
                   {[
-                    ['Generate DevOps Files', '/generate'],
                     ['View Generated Projects', '/admin/generated-projects'],
                     ['Manage Users', '/admin/user-management'],
+                    ['Review Audit Logs', '/admin/audit-logs'],
                     ['Review System Usage', '/admin/system-usage'],
                     ['Open Profile Settings', '/profile'],
                   ].map(([label, to]) => (

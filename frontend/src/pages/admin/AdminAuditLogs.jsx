@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react'
 import { Card, CardHeader, CardContent } from '../../components/ui/Card'
 import { Table } from '../../components/ui/Table'
-import { auditLogs } from '../../data/mockData'
-import { api, unwrap } from '../../services/api'
+import { api, apiErrorMessage, unwrap } from '../../services/api'
 
 export default function AdminAuditLogs() {
-  const [logs, setLogs] = useState(auditLogs)
+  const [logs, setLogs] = useState([])
+  const [message, setMessage] = useState('')
 
   useEffect(() => {
     async function loadLogs() {
@@ -19,29 +19,34 @@ export default function AdminAuditLogs() {
           result: log.status,
           ip: log.ip_address || 'unknown',
         })))
-      } catch {
-        setLogs(auditLogs)
+      } catch (error) {
+        setMessage(apiErrorMessage(error, 'Could not load audit logs.'))
       }
     }
     loadLogs()
   }, [])
 
   return (
-    <Card>
-      <CardHeader title="Audit Logs" description="Sensitive platform actions: login, project creation, deployments, scans, AI analysis, keys, clusters, and role updates." />
-      <CardContent>
-        <Table
-          columns={[
-            { key: 'time', header: 'Timestamp' },
-            { key: 'actor', header: 'Actor', render: (row) => <span className="font-medium text-slate-100">{row.actor}</span> },
-            { key: 'action', header: 'Action' },
-            { key: 'target', header: 'Target' },
-            { key: 'result', header: 'Result' },
-            { key: 'ip', header: 'IP' },
-          ]}
-          data={logs}
-        />
-      </CardContent>
-    </Card>
+    <div className="mx-auto max-w-7xl space-y-6">
+      <h1 className="text-3xl font-bold text-white">Audit Logs</h1>
+      {message ? <div className="rounded-md border border-amber-400/30 bg-amber-400/10 p-3 text-sm text-amber-100">{message}</div> : null}
+      <Card>
+        <CardHeader title="Audit Events" description="Sensitive platform actions including login, user management, GitHub connection, GitOps, scans, and healing actions." />
+        <CardContent>
+          <Table
+            columns={[
+              { key: 'time', header: 'Timestamp' },
+              { key: 'actor', header: 'Actor', render: (row) => <span className="font-medium text-slate-100">{row.actor}</span> },
+              { key: 'action', header: 'Action' },
+              { key: 'target', header: 'Target' },
+              { key: 'result', header: 'Result' },
+              { key: 'ip', header: 'IP' },
+            ]}
+            data={logs}
+            emptyMessage="No audit logs found."
+          />
+        </CardContent>
+      </Card>
+    </div>
   )
 }

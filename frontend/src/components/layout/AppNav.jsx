@@ -13,9 +13,9 @@ export function AppNav({ user, onLogout }) {
     : user.role === 'ADMIN'
       ? [
           ['Dashboard', '/admin/dashboard'],
-          ['Generate Project', '/generate'],
-          ['My Projects', '/my-projects'],
-          ['Admin Panel', '/admin/user-management'],
+          ['Projects', '/admin/generated-projects'],
+          ['Users', '/admin/user-management'],
+          ['Audit Logs', '/admin/audit-logs'],
           ['System Usage', '/admin/system-usage'],
           [profileLabel, '/profile'],
         ]

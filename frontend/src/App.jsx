@@ -18,6 +18,7 @@ const AdminDashboard = lazy(() => import('./pages/saas/AdminDashboard'))
 const UserManagement = lazy(() => import('./pages/saas/UserManagement'))
 const SaasAdminProjects = lazy(() => import('./pages/saas/AdminProjects'))
 const SystemUsage = lazy(() => import('./pages/saas/SystemUsage'))
+const AdminAuditLogs = lazy(() => import('./pages/admin/AdminAuditLogs'))
 const Overview = lazy(() => import('./pages/Overview'))
 const Projects = lazy(() => import('./pages/Projects'))
 const CreateProject = lazy(() => import('./pages/CreateProject'))
@@ -102,9 +103,10 @@ function AdminRequired({ user }) {
   )
 }
 
-function ProtectedRoute({ user, admin = false, children }) {
+function ProtectedRoute({ user, admin = false, userOnly = false, children }) {
   if (!user) return <AuthRequired />
   if (admin && user.role !== 'ADMIN') return <AdminRequired user={user} />
+  if (userOnly && user.role === 'ADMIN') return <Navigate to="/admin/dashboard" replace />
   return children
 }
 
@@ -136,37 +138,37 @@ function RouteTransitions({ user, onAuthenticated, onLogout }) {
         <Suspense fallback={<LoadingState />}>
           <Routes location={location}>
             <Route path="/" element={<LandingPage user={user} />} />
-            <Route path="/generate" element={<GeneratorPage user={user} />} />
-            <Route path="/result/:id" element={<ResultPage />} />
+            <Route path="/generate" element={user?.role === 'ADMIN' ? <Navigate to="/admin/dashboard" replace /> : <GeneratorPage user={user} />} />
+            <Route path="/result/:id" element={user?.role === 'ADMIN' ? <Navigate to="/admin/generated-projects" replace /> : <ResultPage />} />
             <Route path="/login" element={<AuthPage key="login" mode="login" onAuthenticated={onAuthenticated} />} />
             <Route path="/signup" element={<AuthPage key="signup" mode="signup" onAuthenticated={onAuthenticated} />} />
             <Route path="/forgot-password" element={<AuthPage key="forgot" mode="forgot" onAuthenticated={onAuthenticated} />} />
             <Route path="/reset-password" element={<AuthPage key="reset" mode="reset" onAuthenticated={onAuthenticated} />} />
 
-            <Route path="/dashboard" element={<ProtectedRoute user={user}><UserDashboard user={user} /></ProtectedRoute>} />
-            <Route path="/my-projects" element={<ProtectedRoute user={user}><MyProjects user={user} /></ProtectedRoute>} />
+            <Route path="/dashboard" element={<ProtectedRoute user={user} userOnly><UserDashboard user={user} /></ProtectedRoute>} />
+            <Route path="/my-projects" element={<ProtectedRoute user={user} userOnly><MyProjects user={user} /></ProtectedRoute>} />
             <Route path="/app" element={<Navigate to="/app/overview" replace />} />
-            <Route path="/app/overview" element={<ProtectedRoute user={user}><DashboardLayout user={user}><Overview /></DashboardLayout></ProtectedRoute>} />
-            <Route path="/app/projects" element={<ProtectedRoute user={user}><DashboardLayout user={user}><Projects user={user} /></DashboardLayout></ProtectedRoute>} />
-            <Route path="/app/create-project" element={<ProtectedRoute user={user}><DashboardLayout user={user}><CreateProject /></DashboardLayout></ProtectedRoute>} />
-            <Route path="/app/upload-project" element={<ProtectedRoute user={user}><DashboardLayout user={user}><UploadProject /></DashboardLayout></ProtectedRoute>} />
-            <Route path="/app/project-analysis" element={<ProtectedRoute user={user}><DashboardLayout user={user}><ProjectAnalysis /></DashboardLayout></ProtectedRoute>} />
-            <Route path="/app/projects/:projectId/analysis" element={<ProtectedRoute user={user}><DashboardLayout user={user}><ProjectAnalysis /></DashboardLayout></ProtectedRoute>} />
-            <Route path="/app/devops-generator" element={<ProtectedRoute user={user}><DashboardLayout user={user}><DevOpsGenerator /></DashboardLayout></ProtectedRoute>} />
-            <Route path="/app/connect-github" element={<ProtectedRoute user={user}><DashboardLayout user={user}><ConnectGitHub /></DashboardLayout></ProtectedRoute>} />
-            <Route path="/app/generated-files" element={<ProtectedRoute user={user}><DashboardLayout user={user}><GeneratedFiles /></DashboardLayout></ProtectedRoute>} />
-            <Route path="/app/generated-files/:fileId" element={<ProtectedRoute user={user}><DashboardLayout user={user}><GeneratedFilePreview /></DashboardLayout></ProtectedRoute>} />
-            <Route path="/app/deployments" element={<ProtectedRoute user={user}><DashboardLayout user={user}><Deployments /></DashboardLayout></ProtectedRoute>} />
-            <Route path="/app/gitops" element={<ProtectedRoute user={user}><DashboardLayout user={user}><GitOps /></DashboardLayout></ProtectedRoute>} />
-            <Route path="/app/kubernetes" element={<ProtectedRoute user={user}><DashboardLayout user={user}><Kubernetes /></DashboardLayout></ProtectedRoute>} />
-            <Route path="/app/monitoring" element={<ProtectedRoute user={user}><DashboardLayout user={user}><Monitoring /></DashboardLayout></ProtectedRoute>} />
-            <Route path="/app/logs" element={<ProtectedRoute user={user}><DashboardLayout user={user}><Logs /></DashboardLayout></ProtectedRoute>} />
-            <Route path="/app/incidents" element={<ProtectedRoute user={user}><DashboardLayout user={user}><Incidents /></DashboardLayout></ProtectedRoute>} />
-            <Route path="/app/healing-actions" element={<ProtectedRoute user={user}><DashboardLayout user={user}><HealingActions user={user} /></DashboardLayout></ProtectedRoute>} />
-            <Route path="/app/ai-assistant" element={<ProtectedRoute user={user}><DashboardLayout user={user}><AIAssistant /></DashboardLayout></ProtectedRoute>} />
-            <Route path="/app/security" element={<ProtectedRoute user={user}><DashboardLayout user={user}><Security /></DashboardLayout></ProtectedRoute>} />
-            <Route path="/app/infrastructure" element={<ProtectedRoute user={user}><DashboardLayout user={user}><Infrastructure /></DashboardLayout></ProtectedRoute>} />
-            <Route path="/app/settings" element={<ProtectedRoute user={user}><DashboardLayout user={user}><Settings /></DashboardLayout></ProtectedRoute>} />
+            <Route path="/app/overview" element={<ProtectedRoute user={user} userOnly><DashboardLayout user={user}><Overview /></DashboardLayout></ProtectedRoute>} />
+            <Route path="/app/projects" element={<ProtectedRoute user={user} userOnly><DashboardLayout user={user}><Projects user={user} /></DashboardLayout></ProtectedRoute>} />
+            <Route path="/app/create-project" element={<ProtectedRoute user={user} userOnly><DashboardLayout user={user}><CreateProject /></DashboardLayout></ProtectedRoute>} />
+            <Route path="/app/upload-project" element={<ProtectedRoute user={user} userOnly><DashboardLayout user={user}><UploadProject /></DashboardLayout></ProtectedRoute>} />
+            <Route path="/app/project-analysis" element={<ProtectedRoute user={user} userOnly><DashboardLayout user={user}><ProjectAnalysis /></DashboardLayout></ProtectedRoute>} />
+            <Route path="/app/projects/:projectId/analysis" element={<ProtectedRoute user={user} userOnly><DashboardLayout user={user}><ProjectAnalysis /></DashboardLayout></ProtectedRoute>} />
+            <Route path="/app/devops-generator" element={<ProtectedRoute user={user} userOnly><DashboardLayout user={user}><DevOpsGenerator /></DashboardLayout></ProtectedRoute>} />
+            <Route path="/app/connect-github" element={<ProtectedRoute user={user} userOnly><DashboardLayout user={user}><ConnectGitHub /></DashboardLayout></ProtectedRoute>} />
+            <Route path="/app/generated-files" element={<ProtectedRoute user={user} userOnly><DashboardLayout user={user}><GeneratedFiles /></DashboardLayout></ProtectedRoute>} />
+            <Route path="/app/generated-files/:fileId" element={<ProtectedRoute user={user} userOnly><DashboardLayout user={user}><GeneratedFilePreview /></DashboardLayout></ProtectedRoute>} />
+            <Route path="/app/deployments" element={<ProtectedRoute user={user} userOnly><DashboardLayout user={user}><Deployments /></DashboardLayout></ProtectedRoute>} />
+            <Route path="/app/gitops" element={<ProtectedRoute user={user} userOnly><DashboardLayout user={user}><GitOps /></DashboardLayout></ProtectedRoute>} />
+            <Route path="/app/kubernetes" element={<ProtectedRoute user={user} userOnly><DashboardLayout user={user}><Kubernetes /></DashboardLayout></ProtectedRoute>} />
+            <Route path="/app/monitoring" element={<ProtectedRoute user={user} userOnly><DashboardLayout user={user}><Monitoring /></DashboardLayout></ProtectedRoute>} />
+            <Route path="/app/logs" element={<ProtectedRoute user={user} userOnly><DashboardLayout user={user}><Logs /></DashboardLayout></ProtectedRoute>} />
+            <Route path="/app/incidents" element={<ProtectedRoute user={user} userOnly><DashboardLayout user={user}><Incidents /></DashboardLayout></ProtectedRoute>} />
+            <Route path="/app/healing-actions" element={<ProtectedRoute user={user} userOnly><DashboardLayout user={user}><HealingActions user={user} /></DashboardLayout></ProtectedRoute>} />
+            <Route path="/app/ai-assistant" element={<ProtectedRoute user={user} userOnly><DashboardLayout user={user}><AIAssistant /></DashboardLayout></ProtectedRoute>} />
+            <Route path="/app/security" element={<ProtectedRoute user={user} userOnly><DashboardLayout user={user}><Security /></DashboardLayout></ProtectedRoute>} />
+            <Route path="/app/infrastructure" element={<ProtectedRoute user={user} userOnly><DashboardLayout user={user}><Infrastructure /></DashboardLayout></ProtectedRoute>} />
+            <Route path="/app/settings" element={<ProtectedRoute user={user} userOnly><DashboardLayout user={user}><Settings /></DashboardLayout></ProtectedRoute>} />
             <Route path="/profile" element={<ProtectedRoute user={user}><Profile user={user} onLogout={onLogout} /></ProtectedRoute>} />
 
             <Route path="/admin" element={<Navigate to="/admin/dashboard" replace />} />
@@ -174,6 +176,7 @@ function RouteTransitions({ user, onAuthenticated, onLogout }) {
             <Route path="/admin/user-management" element={<ProtectedRoute user={user} admin><UserManagement /></ProtectedRoute>} />
             <Route path="/admin/generated-projects" element={<ProtectedRoute user={user} admin><SaasAdminProjects /></ProtectedRoute>} />
             <Route path="/admin/system-usage" element={<ProtectedRoute user={user} admin><SystemUsage /></ProtectedRoute>} />
+            <Route path="/admin/audit-logs" element={<ProtectedRoute user={user} admin><AdminAuditLogs /></ProtectedRoute>} />
             <Route path="/admin/*" element={<Navigate to="/admin/dashboard" replace />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>

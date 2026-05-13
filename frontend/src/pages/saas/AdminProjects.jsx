@@ -1,43 +1,47 @@
-import { Link } from 'react-router-dom'
-import { useState } from 'react'
-import { Button } from '../../components/ui/Button'
-import { Card, CardContent, CardHeader } from '../../components/ui/Card'
+import { useEffect, useState } from 'react'
 import { Badge } from '../../components/ui/Badge'
-import { deleteProject, getProjects } from '../../utils/generator'
+import { Card, CardContent, CardHeader } from '../../components/ui/Card'
+import { Table } from '../../components/ui/Table'
+import { api, apiErrorMessage, unwrap } from '../../services/api'
 
 export default function AdminProjects() {
-  const [projects, setProjects] = useState(() => getProjects())
+  const [projects, setProjects] = useState([])
+  const [message, setMessage] = useState('')
 
-  function remove(projectId) {
-    deleteProject(projectId)
-    setProjects(getProjects())
-  }
+  useEffect(() => {
+    async function loadProjects() {
+      try {
+        setProjects(unwrap(await api.get('/admin/projects')) || [])
+      } catch (error) {
+        setMessage(apiErrorMessage(error, 'Could not load user projects.'))
+      }
+    }
+    loadProjects()
+  }, [])
 
   return (
     <div className="mx-auto max-w-7xl space-y-6">
-      <h1 className="text-3xl font-bold text-white">All Generated Projects</h1>
+      <div>
+        <h1 className="text-3xl font-bold text-white">User Projects</h1>
+        <p className="mt-2 text-sm text-slate-400">Read-only project visibility for platform administrators.</p>
+      </div>
+      {message ? <div className="rounded-md border border-amber-400/30 bg-amber-400/10 p-3 text-sm text-amber-100">{message}</div> : null}
       <Card>
-        <CardHeader title="Project history" description="Platform-wide generated project telemetry from the frontend generator." />
+        <CardHeader title="Projects" description="Projects created by users across the platform. Admins can review ownership and deployment metadata without creating projects." />
         <CardContent>
-          <div className="space-y-3">
-            {projects.map((project) => (
-              <div key={project.id} className="flex flex-col gap-3 rounded-lg border border-slate-800 bg-slate-950 p-4 md:flex-row md:items-center md:justify-between">
-                <div>
-                  <div className="mb-2 flex flex-wrap gap-2">
-                    <Badge tone="cyan">{project.projectType}</Badge>
-                    <Badge tone="purple">{project.difficulty}</Badge>
-                  </div>
-                  <p className="font-medium text-white">{project.title}</p>
-                  <p className="mt-1 text-xs text-slate-500">{project.owner} · {new Date(project.createdAt).toLocaleString()}</p>
-                </div>
-                <div className="flex gap-2">
-                  <Link to={`/result/${project.id}`}><Button size="sm" variant="secondary">View</Button></Link>
-                  <Button size="sm" variant="danger" onClick={() => remove(project.id)}>Delete</Button>
-                </div>
-              </div>
-            ))}
-            {!projects.length ? <p className="text-sm text-slate-400">No projects generated yet.</p> : null}
-          </div>
+          <Table
+            columns={[
+              { key: 'name', header: 'Project', render: (row) => <span className="font-medium text-slate-100">{row.name}</span> },
+              { key: 'owner_id', header: 'Owner ID' },
+              { key: 'deployment_type', header: 'Deployment', render: (row) => <Badge tone="cyan">{row.deployment_type}</Badge> },
+              { key: 'environment', header: 'Environment', render: (row) => <Badge tone={row.environment === 'prod' ? 'amber' : 'purple'}>{row.environment}</Badge> },
+              { key: 'namespace', header: 'Namespace' },
+              { key: 'github_repo_url', header: 'GitHub', render: (row) => row.github_repo_url ? <a className="text-cyan-300 hover:text-cyan-100" href={row.github_repo_url} target="_blank" rel="noreferrer">Open repo</a> : '-' },
+              { key: 'created_at', header: 'Created', render: (row) => row.created_at ? new Date(row.created_at).toLocaleString() : '-' },
+            ]}
+            data={projects}
+            emptyMessage="No user projects found."
+          />
         </CardContent>
       </Card>
     </div>
