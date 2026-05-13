@@ -2,6 +2,7 @@ import re
 
 RULES = [
     ("CrashLoopBackOff", "The pod is repeatedly crashing after startup.", "high", "Inspect container logs and fix the startup failure.", "kubectl logs <pod> -n <namespace> --previous", "Add startup checks and release smoke tests."),
+    ("Back-off restarting failed container|BackOff", "The container is repeatedly failing after startup and Kubernetes is backing off restarts.", "high", "Check previous container logs, required environment variables, startup dependencies, and resource limits.", "kubectl logs <pod> -n <namespace> --previous", "Add startup validation, readiness gates, and release smoke tests."),
     ("ImagePullBackOff|ErrImagePull", "Kubernetes cannot pull the container image.", "high", "Verify image name, tag, registry credentials, and imagePullSecrets.", "kubectl describe pod <pod> -n <namespace>", "Validate image existence before GitOps promotion."),
     ("OOMKilled|high memory", "The container is running out of memory.", "high", "Increase memory limits or reduce application memory usage.", "kubectl top pod -n <namespace>", "Add memory alerts and load testing."),
     ("secret not found|DATABASE_URL is missing", "A required Kubernetes Secret or DATABASE_URL is missing.", "high", "Create or update the Kubernetes Secret with required placeholder-backed values.", "kubectl create secret generic backend-secret --from-literal=DATABASE_URL=...", "Add required environment variable checks during CI/CD."),

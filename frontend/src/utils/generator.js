@@ -16,10 +16,20 @@ const PROJECTS_KEY = 'opsforge_generated_projects'
 const GUEST_COUNT_KEY = 'opsforge_guest_generation_count'
 const GUEST_ID_KEY = 'opsforge_guest_id'
 
+function createLocalId() {
+  if (globalThis.crypto?.randomUUID) {
+    return globalThis.crypto.randomUUID()
+  }
+  const randomPart = globalThis.crypto?.getRandomValues
+    ? Array.from(globalThis.crypto.getRandomValues(new Uint32Array(2)), (value) => value.toString(36)).join('')
+    : Math.random().toString(36).slice(2)
+  return `${Date.now().toString(36)}-${randomPart}`
+}
+
 export function getGuestId() {
   let guestId = localStorage.getItem(GUEST_ID_KEY)
   if (!guestId) {
-    guestId = crypto.randomUUID()
+    guestId = createLocalId()
     localStorage.setItem(GUEST_ID_KEY, guestId)
   }
   return guestId
@@ -110,7 +120,7 @@ export function generateProject({ projectType, difficulty, requirement, user }) 
   const files = fileSet(projectType, title)
 
   return {
-    id: crypto.randomUUID(),
+    id: createLocalId(),
     owner: user?.email || 'guest',
     title,
     projectType,

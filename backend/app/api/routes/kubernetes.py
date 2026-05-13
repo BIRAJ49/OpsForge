@@ -1,7 +1,11 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
+from sqlalchemy.orm import Session
 
+from app.core.database import get_db
 from app.core.permissions import get_current_user
+from app.core.permissions import request_meta
 from app.core.response import success_response
+from app.services.audit_service import record_audit
 from app.services.kubernetes_service import kubernetes_service
 
 router = APIRouter(prefix="/kubernetes", tags=["kubernetes"])
@@ -45,6 +49,15 @@ def secrets(current_user=Depends(get_current_user)):
 @router.get("/hpa")
 def hpa(current_user=Depends(get_current_user)):
     return success_response("HPA loaded", kubernetes_service.list_resource("hpa"))
+
+
+@router.post("/incidents/analyze")
+def analyze_cluster_incidents(request: Request, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    result = kubernetes_service.analyze_cluster_incidents()
+    ip, ua = request_meta(request)
+    record_audit(db, user_id=current_user.id, action="Kubernetes incident analysis", resource_type="kubernetes", resource_id=None, ip_address=ip, user_agent=ua)
+    db.commit()
+    return success_response("Kubernetes incident analysis complete", result)
 
 
 @router.get("/pods/{pod_name}/logs")

@@ -10,6 +10,21 @@ from app.services.audit_service import record_audit
 router = APIRouter(tags=["gitops"])
 
 
+@router.get("/gitops/applications")
+async def applications(current_user=Depends(get_current_user)):
+    return success_response("Argo CD applications loaded", await argocd_service.list_applications())
+
+
+@router.post("/projects/{project_id}/gitops/application")
+def create_application(project_id: int, request: Request, path: str = "k8s", db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    project = project_for_user(project_id, db, current_user)
+    result = argocd_service.create_or_update_application(project, path=path)
+    ip, ua = request_meta(request)
+    record_audit(db, user_id=current_user.id, action="Argo CD application registration", resource_type="project", resource_id=project.id, ip_address=ip, user_agent=ua, status=result["status"])
+    db.commit()
+    return success_response("Argo CD application registration requested", result)
+
+
 @router.get("/projects/{project_id}/gitops/status")
 async def status(project_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     project = project_for_user(project_id, db, current_user)

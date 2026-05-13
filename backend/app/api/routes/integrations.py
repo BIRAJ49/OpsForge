@@ -65,7 +65,15 @@ def github_status(db: Session = Depends(get_db), current_user=Depends(get_curren
     user_status = get_user_status(db, "github", current_user)
     if user_status["status"] == "configured":
         return success_response("GitHub status loaded", user_status)
-    return success_response("GitHub status loaded", get_status(db, "github"))
+    platform_status = get_status(db, "github")
+    return success_response(
+        "GitHub status loaded",
+        {
+            **user_status,
+            "platform_status": platform_status["status"],
+            "message": "Connect your GitHub account to create repositories, import private repos, and push generated files.",
+        },
+    )
 
 
 @router.post("/github/user/connect")

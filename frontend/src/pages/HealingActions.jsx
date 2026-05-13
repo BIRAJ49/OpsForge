@@ -1,126 +1,150 @@
-import { useState } from 'react'
-import { Activity, CheckCircle2, Play, RotateCcw, Search } from 'lucide-react'
+import { CheckCircle2, Clock, Play, RefreshCw } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import { Button } from '../components/ui/Button'
 import { Card, CardContent, CardHeader } from '../components/ui/Card'
-import { Badge } from '../components/ui/Badge'
-import { api, unwrap } from '../services/api'
+import { StatusBadge } from '../components/ui/StatusBadge'
+import { api, apiErrorMessage, unwrap } from '../services/api'
 
-const actionTypes = [
-  'restart deployment',
-  'scale deployment',
-  'rollback deployment',
-  'collect logs',
-  'create incident',
-  'mark resolved',
-]
+function formatDate(value) {
+  return value ? new Date(value).toLocaleString() : '-'
+}
 
-export default function HealingActions() {
-  const [signal, setSignal] = useState('CrashLoopBackOff detected in backend deployment after latest rollout')
-  const [actionType, setActionType] = useState('restart deployment')
-  const [action, setAction] = useState(null)
-  const [analysis, setAnalysis] = useState(null)
+function actionTarget(action) {
+  const params = action.parameters || {}
+  if (params.namespace && params.pod_name) return `${params.namespace}/${params.pod_name}`
+  if (action.project_id) return `Project #${action.project_id}`
+  if (action.incident_id) return `Incident #${action.incident_id}`
+  return 'Platform action'
+}
+
+function statusCounts(actions) {
+  return actions.reduce((counts, action) => {
+    counts[action.status] = (counts[action.status] || 0) + 1
+    return counts
+  }, {})
+}
+
+export default function HealingActions({ user }) {
+  const [rows, setRows] = useState([])
   const [message, setMessage] = useState('')
   const [loading, setLoading] = useState(false)
 
-  async function analyzeSignal() {
+  async function loadActions() {
     setLoading(true)
     setMessage('')
     try {
-      setAnalysis(unwrap(await api.post('/healing/analyze', { signal })))
+      setRows(unwrap(await api.get('/healing/actions')) || [])
     } catch (error) {
-      setMessage(error.response?.data?.message || 'Could not analyze healing signal')
+      setMessage(apiErrorMessage(error, 'Could not load healing actions'))
     } finally {
       setLoading(false)
     }
   }
 
-  async function requestAction() {
-    setLoading(true)
+  useEffect(() => {
+    loadActions()
+  }, [])
+
+  async function approveAction(action) {
     setMessage('')
     try {
-      const requested = unwrap(await api.post('/healing/actions', {
-        action_type: actionType,
-        parameters: actionType === 'scale deployment' ? { replicas: 3 } : {},
-      }))
-      setAction(requested)
-      setMessage('Healing action requested and recorded in audit logs.')
+      const approved = unwrap(await api.post(`/healing/actions/${action.id}/approve`))
+      setRows((current) => current.map((item) => (item.id === approved.id ? approved : item)))
+      setMessage(`Healing action #${approved.id} approved.`)
     } catch (error) {
-      setMessage(error.response?.data?.message || 'Could not request healing action')
-    } finally {
-      setLoading(false)
+      setMessage(apiErrorMessage(error, 'Could not approve healing action'))
     }
   }
 
-  async function executeAction() {
-    if (!action?.id) return
-    setLoading(true)
+  async function executeAction(action) {
     setMessage('')
     try {
-      setAction(unwrap(await api.post(`/healing/actions/${action.id}/execute`)))
-      setMessage('Healing action executed.')
+      const executed = unwrap(await api.post(`/healing/actions/${action.id}/execute`))
+      setRows((current) => current.map((item) => (item.id === executed.id ? executed : item)))
+      setMessage(executed.result?.message || `Healing action #${executed.id} executed.`)
     } catch (error) {
-      setMessage(error.response?.data?.message || 'Could not execute healing action')
-    } finally {
-      setLoading(false)
+      setMessage(apiErrorMessage(error, 'Could not execute healing action'))
     }
   }
+
+  const counts = statusCounts(rows)
 
   return (
-    <div className="grid gap-6 xl:grid-cols-[1fr_420px]">
+    <div className="space-y-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-white">Healing Actions</h1>
+          <p className="mt-1 text-sm text-slate-400">Review, approve, and execute controlled restart, rollback, scale, and incident response actions.</p>
+        </div>
+        <Button variant="secondary" icon={RefreshCw} onClick={loadActions}>Refresh</Button>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-3">
+        {[
+          ['Requested', counts.requested || 0],
+          ['Approved', counts.approved || 0],
+          ['Executed', counts.executed || 0],
+        ].map(([label, value]) => (
+          <Card key={label}>
+            <CardContent>
+              <p className="text-xs uppercase tracking-wide text-slate-500">{label}</p>
+              <p className="mt-2 text-2xl font-bold text-white">{value}</p>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
       <Card>
-        <CardHeader title="Self-Healing Actions" description="Controlled restart, scale, rollback, log collection, and incident actions with manual approval mode." />
-        <CardContent className="space-y-5">
-          {message ? <div className="rounded-md border border-cyan-400/30 bg-cyan-400/10 p-3 text-sm text-cyan-100">{message}</div> : null}
-          <label className="block space-y-2">
-            <span className="text-sm text-slate-300">Incident or deployment signal</span>
-            <textarea
-              value={signal}
-              onChange={(event) => setSignal(event.target.value)}
-              rows={5}
-              className="w-full resize-none rounded-md border border-slate-700 bg-slate-950 px-3 py-3 text-slate-100 outline-none focus:border-cyan-400"
-            />
-          </label>
-          <div className="flex flex-wrap gap-2">
-            <Button icon={Search} onClick={analyzeSignal} disabled={loading}>Analyze Signal</Button>
-            <select value={actionType} onChange={(event) => setActionType(event.target.value)} className="h-10 rounded-md border border-slate-700 bg-slate-950 px-3 text-sm text-slate-100 outline-none focus:border-cyan-400">
-              {actionTypes.map((type) => <option key={type}>{type}</option>)}
-            </select>
-            <Button variant="secondary" icon={RotateCcw} onClick={requestAction} disabled={loading}>Request Action</Button>
-            <Button variant="warning" icon={Play} onClick={executeAction} disabled={loading || !action?.id}>Execute</Button>
-          </div>
+        <CardHeader title="Requested Actions" description="Actions are recorded first. Production restart and rollback actions require admin approval." />
+        <CardContent>
+          {message ? <div className="mb-4 rounded-md border border-cyan-400/30 bg-cyan-400/10 p-3 text-sm text-cyan-100">{message}</div> : null}
+          {loading ? <div className="py-8 text-center text-sm text-slate-400">Loading healing actions...</div> : null}
+          {!loading && !rows.length ? (
+            <div className="rounded-lg border border-slate-800 bg-slate-950/60 px-4 py-10 text-center text-sm text-slate-500">
+              No healing actions recorded yet.
+            </div>
+          ) : null}
+          {!loading && rows.length ? (
+            <div className="grid gap-4">
+              {rows.map((row) => (
+                <div key={row.id} className="rounded-lg border border-slate-800 bg-slate-950/70 p-4">
+                  <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+                    <div className="min-w-0 space-y-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="rounded-md border border-slate-800 bg-slate-900 px-2.5 py-1 font-mono text-xs text-slate-300">#{row.id}</span>
+                        <StatusBadge status={row.status} />
+                        <span className="inline-flex items-center gap-1 text-xs text-slate-500"><Clock className="h-3.5 w-3.5" />{formatDate(row.created_at)}</span>
+                      </div>
+                      <div>
+                        <h2 className="text-base font-semibold capitalize text-white">{row.action_type}</h2>
+                        <p className="mt-1 font-mono text-sm text-cyan-100">{actionTarget(row)}</p>
+                      </div>
+                      <div className="grid gap-2 text-sm text-slate-400 lg:grid-cols-2">
+                        {row.parameters?.status ? <p><span className="text-slate-200">Detected status:</span> {row.parameters.status}</p> : null}
+                        {row.incident_id ? <p><span className="text-slate-200">Incident:</span> #{row.incident_id}</p> : null}
+                        {row.project_id ? <p><span className="text-slate-200">Project:</span> #{row.project_id}</p> : null}
+                        {row.executed_at ? <p><span className="text-slate-200">Executed:</span> {formatDate(row.executed_at)}</p> : null}
+                      </div>
+                      {row.parameters?.evidence_command ? (
+                        <pre className="custom-scrollbar max-w-full overflow-auto rounded-md border border-slate-800 bg-slate-900 p-3 text-xs text-cyan-100">{row.parameters.evidence_command}</pre>
+                      ) : null}
+                      {row.result?.message ? (
+                        <div className="rounded-md border border-emerald-400/30 bg-emerald-500/10 p-3 text-sm text-emerald-100">{row.result.message}</div>
+                      ) : null}
+                    </div>
+                    <div className="flex shrink-0 flex-wrap gap-2 xl:justify-end">
+                      {user?.role === 'ADMIN' && row.status === 'requested' ? (
+                        <Button size="sm" variant="secondary" icon={CheckCircle2} onClick={() => approveAction(row)}>Approve</Button>
+                      ) : null}
+                      {row.status !== 'executed' ? (
+                        <Button size="sm" icon={Play} onClick={() => executeAction(row)}>Execute</Button>
+                      ) : null}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : null}
         </CardContent>
       </Card>
-
-      <div className="space-y-4">
-        <Card>
-          <CardHeader title="Analysis Result" />
-          <CardContent>
-            {analysis ? (
-              <div className="space-y-3 text-sm">
-                <div className="flex items-center justify-between"><span className="text-slate-400">Action</span><Badge tone="cyan">{analysis.recommended_action || 'manual review'}</Badge></div>
-                <div className="flex items-center justify-between"><span className="text-slate-400">Risk</span><Badge tone={analysis.risk === 'high' ? 'rose' : 'amber'}>{analysis.risk || 'medium'}</Badge></div>
-                <p className="leading-6 text-slate-300">{analysis.reason || analysis.message || 'Review the signal and choose a controlled action.'}</p>
-              </div>
-            ) : (
-              <p className="text-sm text-slate-400">Run an analysis to get a recommended controlled action.</p>
-            )}
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader title="Current Action" />
-          <CardContent>
-            {action ? (
-              <div className="space-y-3 text-sm">
-                <div className="flex items-center gap-2"><Activity className="h-4 w-4 text-cyan-300" /><span className="text-slate-100">{action.action_type}</span></div>
-                <div className="flex items-center gap-2"><CheckCircle2 className="h-4 w-4 text-emerald-300" /><Badge tone="purple">{action.status}</Badge></div>
-                <pre className="custom-scrollbar overflow-x-auto rounded-md border border-slate-800 bg-slate-950 p-3 text-xs text-slate-300">{JSON.stringify(action.result || action.parameters || {}, null, 2)}</pre>
-              </div>
-            ) : (
-              <p className="text-sm text-slate-400">No action requested yet.</p>
-            )}
-          </CardContent>
-        </Card>
-      </div>
     </div>
   )
 }

@@ -29,6 +29,7 @@ const Kubernetes = lazy(() => import('./pages/Kubernetes'))
 const Monitoring = lazy(() => import('./pages/Monitoring'))
 const Logs = lazy(() => import('./pages/Logs'))
 const Incidents = lazy(() => import('./pages/Incidents'))
+const HealingActions = lazy(() => import('./pages/HealingActions'))
 const AIAssistant = lazy(() => import('./pages/AIAssistant'))
 const Security = lazy(() => import('./pages/Security'))
 const Infrastructure = lazy(() => import('./pages/Infrastructure'))
@@ -161,6 +162,7 @@ function RouteTransitions({ user, onAuthenticated, onLogout }) {
             <Route path="/app/monitoring" element={<ProtectedRoute user={user}><DashboardLayout user={user}><Monitoring /></DashboardLayout></ProtectedRoute>} />
             <Route path="/app/logs" element={<ProtectedRoute user={user}><DashboardLayout user={user}><Logs /></DashboardLayout></ProtectedRoute>} />
             <Route path="/app/incidents" element={<ProtectedRoute user={user}><DashboardLayout user={user}><Incidents /></DashboardLayout></ProtectedRoute>} />
+            <Route path="/app/healing-actions" element={<ProtectedRoute user={user}><DashboardLayout user={user}><HealingActions user={user} /></DashboardLayout></ProtectedRoute>} />
             <Route path="/app/ai-assistant" element={<ProtectedRoute user={user}><DashboardLayout user={user}><AIAssistant /></DashboardLayout></ProtectedRoute>} />
             <Route path="/app/security" element={<ProtectedRoute user={user}><DashboardLayout user={user}><Security /></DashboardLayout></ProtectedRoute>} />
             <Route path="/app/infrastructure" element={<ProtectedRoute user={user}><DashboardLayout user={user}><Infrastructure /></DashboardLayout></ProtectedRoute>} />

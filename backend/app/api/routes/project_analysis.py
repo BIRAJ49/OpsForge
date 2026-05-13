@@ -22,7 +22,7 @@ from app.schemas.project_analysis import (
 from app.services.audit_service import record_audit
 from app.services.generate_from_analysis_service import generate_from_analysis, regenerate_one_file
 from app.services.github_repo_analyzer_service import clone_github_repo
-from app.services.integration_service import get_user_config_value
+from app.services.integration_service import get_user_config_value, get_user_secret
 from app.services.project_analyzer_service import analyze_project_path, latest_analysis
 from app.services.project_service import create_project
 from app.services.upload_service import cleanup_upload_path, extract_zip_upload
@@ -117,7 +117,7 @@ def import_from_github(payload: GithubImportRequest, request: Request, db: Sessi
     db.flush()
     root = None
     try:
-        root = clone_github_repo(payload.github_repo_url, payload.branch_name)
+        root = clone_github_repo(payload.github_repo_url, payload.branch_name, get_user_secret(db, "github", current_user))
         upload.status = UploadStatus.extracted
         analysis = analyze_project_path(db, project.id, current_user.id, root)
         upload.status = UploadStatus.analyzed
@@ -127,6 +127,16 @@ def import_from_github(payload: GithubImportRequest, request: Request, db: Sessi
         record_audit(db, user_id=current_user.id, action="GitHub repo imported", resource_type="project", resource_id=project.id, ip_address=ip, user_agent=ua)
         db.commit()
         return success_response("GitHub repo analyzed successfully", {"project": {"id": project.id, "name": project.name}, "analysis": ProjectAnalysisOut.model_validate(analysis).model_dump()}, 201)
+    except HTTPException as exc:
+        upload.status = UploadStatus.failed
+        upload.error_message = str(exc.detail)
+        db.commit()
+        return error_response(str(exc.detail), "GITHUB_IMPORT_FAILED", exc.status_code)
+    except Exception:
+        upload.status = UploadStatus.failed
+        upload.error_message = "GitHub import failed"
+        db.commit()
+        return error_response("GitHub import failed", "GITHUB_IMPORT_FAILED", 500)
     finally:
         if root:
             cleanup_upload_path(root)
@@ -138,7 +148,7 @@ def analyze_github_repo(project_id: int, payload: AnalyzeGithubRequest, request:
     repo_url = payload.github_repo_url or project.github_repo_url
     if not repo_url:
         return error_response("GitHub repo URL is required", "GITHUB_REPO_REQUIRED", 400)
-    root = clone_github_repo(repo_url, payload.branch_name)
+    root = clone_github_repo(repo_url, payload.branch_name, get_user_secret(db, "github", current_user))
     try:
         analysis = analyze_project_path(db, project.id, current_user.id, root)
         ip, ua = request_meta(request)

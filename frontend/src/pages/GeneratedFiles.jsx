@@ -4,7 +4,6 @@ import { Link } from 'react-router-dom'
 import { Badge } from '../components/ui/Badge'
 import { Button } from '../components/ui/Button'
 import { Card, CardHeader, CardContent } from '../components/ui/Card'
-import { generatedFiles } from '../data/mockData'
 import { api, apiErrorMessage, projectAnalyzerApi, unwrap } from '../services/api'
 
 function StatusMessage({ tone, message, onClose }) {
@@ -42,8 +41,19 @@ function StatusMessage({ tone, message, onClose }) {
   )
 }
 
+function ConnectGitHubMessage({ text }) {
+  return (
+    <>
+      {text}{' '}
+      <Link to="/app/connect-github" className="font-semibold text-cyan-200 underline decoration-cyan-300/50 underline-offset-4 hover:text-white">
+        Connect GitHub
+      </Link>
+    </>
+  )
+}
+
 export default function GeneratedFiles() {
-  const [files, setFiles] = useState(generatedFiles.map((file) => ({ file_name: file.name, file_type: file.type })))
+  const [files, setFiles] = useState([])
   const [message, setMessage] = useState('')
   const [messageTone, setMessageTone] = useState('info')
   const [loading, setLoading] = useState(true)
@@ -100,7 +110,7 @@ export default function GeneratedFiles() {
   async function regenerateFile(file) {
     if (!projectId) return
     try {
-      const data = unwrap(await projectAnalyzerApi.regenerateFile(projectId, file.file_path))
+      await projectAnalyzerApi.regenerateFile(projectId, file.file_path)
       showMessage(`Regenerated ${file.file_name}`, 'success')
     } catch (error) {
       showMessage(apiErrorMessage(error, 'Could not regenerate file'), 'error')
@@ -112,15 +122,30 @@ export default function GeneratedFiles() {
     try {
       const repoResult = unwrap(await api.post(`/projects/${projectId}/github/create-repo`))
       if (repoResult.status !== 'configured') {
-        showMessage(repoResult.message || 'GitHub repository was not created', 'error')
+        showMessage(
+          repoResult.status === 'requires_connection'
+            ? <ConnectGitHubMessage text={repoResult.message || 'GitHub is not connected for this account.'} />
+            : repoResult.message || 'GitHub repository was not created',
+          repoResult.status === 'requires_connection' ? 'info' : 'error',
+        )
         return
       }
       const pushResult = unwrap(await api.post(`/projects/${projectId}/github/push-generated-files`))
       if (pushResult.status !== 'configured' || pushResult.files_pushed === 0) {
-        showMessage(pushResult.message || 'Generated files were not pushed to GitHub', 'error')
+        showMessage(
+          pushResult.status === 'requires_connection'
+            ? <ConnectGitHubMessage text={pushResult.message || 'GitHub is not connected for this account.'} />
+            : pushResult.message || 'Generated files were not pushed to GitHub',
+          pushResult.status === 'requires_connection' ? 'info' : 'error',
+        )
         return
       }
-      showMessage(`Generated files pushed to GitHub: ${pushResult.files_pushed}/${pushResult.files_total}`, 'success')
+      const appResult = unwrap(await api.post(`/projects/${projectId}/gitops/application?path=k8s`))
+      if (!['created', 'updated'].includes(appResult.status)) {
+        showMessage(`Generated files pushed, but Argo CD registration needs attention: ${appResult.message}`, 'info')
+        return
+      }
+      showMessage(`Generated files pushed to GitHub and Argo CD app ${appResult.app_name} ${appResult.status}.`, 'success')
     } catch (error) {
       showMessage(apiErrorMessage(error, 'GitHub integration token is required before pushing files'), 'error')
     }

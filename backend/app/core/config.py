@@ -70,6 +70,12 @@ class Settings(BaseSettings):
 
     AI_PROVIDER: str = "rule_based"
     AI_ENABLED: bool = False
+    AI_REQUEST_TIMEOUT_SECONDS: int = 30
+    OPENROUTER_API_KEY: str | None = None
+    OPENROUTER_MODEL: str = "openrouter/free"
+    OPENROUTER_FALLBACK_MODELS: str = "meta-llama/llama-3.1-8b-instruct:free,mistralai/mistral-7b-instruct:free,google/gemma-2-9b-it:free"
+    OPENROUTER_USE_FREE_FALLBACKS: bool = True
+    OPENROUTER_MAX_MODEL_ATTEMPTS: int = 12
     PROJECT_ANALYZER_MODE: str = "rule_based"
     MAX_UPLOAD_SIZE_MB: int = 50
     MAX_UPLOAD_FILE_SIZE_MB: int = 100
@@ -78,6 +84,12 @@ class Settings(BaseSettings):
     ALLOW_GITHUB_IMPORT: bool = True
     ALLOW_ZIP_UPLOAD: bool = True
     MONITORING_MODE: str = "mock"
+    PROMETHEUS_URL: str = "http://monitoring-kube-prometheus-prometheus.monitoring.svc.cluster.local:9090"
+    PROMETHEUS_QUERY_TIMEOUT_SECONDS: int = 12
+    LOGS_MODE: str = "mock"
+    LOKI_URL: str = "http://loki.monitoring.svc.cluster.local:3100"
+    LOKI_QUERY_TIMEOUT_SECONDS: int = 12
+    LOKI_DEFAULT_NAMESPACE: str = "opsforge-system"
 
     TRIVY_ENABLED: bool = True
     TRIVY_PATH: str = "trivy"

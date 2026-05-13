@@ -9,6 +9,17 @@ import { api, apiErrorMessage, unwrap } from '../../services/api'
 
 const tabs = ['Overview', 'Architecture', 'Tools', 'Steps', 'Code Files', 'README', 'Downloads']
 
+function ConnectGitHubMessage({ text }) {
+  return (
+    <>
+      {text}{' '}
+      <Link to="/app/connect-github" className="font-semibold text-cyan-200 underline decoration-cyan-300/50 underline-offset-4 hover:text-white">
+        Connect GitHub
+      </Link>
+    </>
+  )
+}
+
 export default function ResultPage() {
   const { id } = useParams()
   const initialProject = useMemo(() => getProjects().find((project) => project.id === id), [id])
@@ -92,12 +103,20 @@ export default function ResultPage() {
     try {
       const repoResult = unwrap(await api.post(`/projects/${backendId}/github/create-repo`))
       if (repoResult.status !== 'configured') {
-        setMessage(repoResult.message || 'GitHub repository was not created')
+        setMessage(
+          repoResult.status === 'requires_connection'
+            ? <ConnectGitHubMessage text={repoResult.message || 'GitHub is not connected for this account.'} />
+            : repoResult.message || 'GitHub repository was not created',
+        )
         return
       }
       const pushResult = unwrap(await api.post(`/projects/${backendId}/github/push-generated-files`))
       if (pushResult.status !== 'configured' || pushResult.files_pushed === 0) {
-        setMessage(pushResult.message || 'Generated files were not pushed to GitHub')
+        setMessage(
+          pushResult.status === 'requires_connection'
+            ? <ConnectGitHubMessage text={pushResult.message || 'GitHub is not connected for this account.'} />
+            : pushResult.message || 'Generated files were not pushed to GitHub',
+        )
         return
       }
       setMessage(`Generated files pushed to GitHub: ${pushResult.files_pushed}/${pushResult.files_total}`)

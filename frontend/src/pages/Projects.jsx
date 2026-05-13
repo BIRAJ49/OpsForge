@@ -8,6 +8,17 @@ import { Table } from '../components/ui/Table'
 import { projects } from '../data/mockData'
 import { api, unwrap } from '../services/api'
 
+function ConnectGitHubMessage({ text }) {
+  return (
+    <>
+      {text}{' '}
+      <Link to="/app/connect-github" className="font-semibold text-cyan-200 underline decoration-cyan-300/50 underline-offset-4 hover:text-white">
+        Connect GitHub
+      </Link>
+    </>
+  )
+}
+
 export default function Projects({ user, onLoginClick }) {
   const [rows, setRows] = useState(projects)
   const [message, setMessage] = useState('')
@@ -77,9 +88,26 @@ export default function Projects({ user, onLoginClick }) {
     if (!row.id) return
     setMessage('')
     try {
-      await api.post(`/projects/${row.id}/github/create-repo`)
-      await api.post(`/projects/${row.id}/github/push-generated-files`)
-      setMessage(`Generated files pushed to GitHub for ${row.name}`)
+      const repoResult = unwrap(await api.post(`/projects/${row.id}/github/create-repo`))
+      if (repoResult.status !== 'configured') {
+        setMessage(
+          repoResult.status === 'requires_connection'
+            ? <ConnectGitHubMessage text={repoResult.message || 'GitHub is not connected for this account.'} />
+            : repoResult.message || 'GitHub repository was not created',
+        )
+        return
+      }
+      const pushResult = unwrap(await api.post(`/projects/${row.id}/github/push-generated-files`))
+      if (pushResult.status !== 'configured') {
+        setMessage(
+          pushResult.status === 'requires_connection'
+            ? <ConnectGitHubMessage text={pushResult.message || 'GitHub is not connected for this account.'} />
+            : pushResult.message || 'Generated files were not pushed to GitHub',
+        )
+        return
+      }
+      const appResult = unwrap(await api.post(`/projects/${row.id}/gitops/application?path=k8s`))
+      setMessage(`Generated files pushed to GitHub for ${row.name}. Argo CD app ${appResult.app_name} ${appResult.status}.`)
     } catch (error) {
       setMessage(error.response?.data?.message || 'GitHub integration token is required before pushing files')
     }

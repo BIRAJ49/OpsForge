@@ -4,7 +4,6 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.models.generated_file import GeneratedFile
 from app.models.project import Project
-from app.services.integration_service import get_status
 
 
 def repo_name(project: Project) -> str:
@@ -23,10 +22,17 @@ def github_headers(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}
 
 
+def _requires_user_connection() -> dict:
+    return {
+        "status": "requires_connection",
+        "message": "GitHub is not connected for this account. Connect GitHub, then retry this action.",
+        "action_url": "/app/connect-github",
+    }
+
+
 async def create_repo(db: Session, project: Project, token: str | None, github_username: str | None = None) -> dict:
-    token = token or settings.GITHUB_TOKEN
     if not token:
-        return {"status": "requires_token", "message": "GitHub token is not configured"}
+        return _requires_user_connection()
     name = repo_name(project)
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.post("https://api.github.com/user/repos", headers=github_headers(token), json={"name": name, "private": False, "auto_init": True})
@@ -38,9 +44,8 @@ async def create_repo(db: Session, project: Project, token: str | None, github_u
 
 
 async def push_files(db: Session, project: Project, files: list[GeneratedFile], token: str | None, github_username: str | None = None) -> dict:
-    token = token or settings.GITHUB_TOKEN
     if not token:
-        return {"status": "requires_token", "message": "GitHub token is not configured"}
+        return _requires_user_connection()
     repo = repo_name(project)
     owner = repo_owner(github_username)
     async with httpx.AsyncClient(timeout=30) as client:
@@ -113,9 +118,8 @@ async def push_files(db: Session, project: Project, files: list[GeneratedFile], 
 
 
 async def create_gitops_repo(token: str | None, github_username: str | None = None) -> dict:
-    token = token or settings.GITHUB_TOKEN
     if not token:
-        return {"status": "requires_token", "message": "GitHub token is not configured"}
+        return _requires_user_connection()
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.post("https://api.github.com/user/repos", headers=github_headers(token), json={"name": settings.GITHUB_GITOPS_REPO, "private": False, "auto_init": True})
     if resp.status_code not in (200, 201, 422):
@@ -125,7 +129,6 @@ async def create_gitops_repo(token: str | None, github_username: str | None = No
 
 
 async def update_gitops_image(project: Project, image_tag: str, token: str | None = None) -> dict:
-    token = token or settings.GITHUB_TOKEN
     if not token:
-        return {"status": "requires_token", "message": "GitHub token is not configured", "image": image_name(project, image_tag)}
+        return {**_requires_user_connection(), "image": image_name(project, image_tag)}
     return {"status": "pending", "message": "GitOps image update endpoint prepared; commit adapter can be enabled with repo layout details", "image": image_name(project, image_tag)}

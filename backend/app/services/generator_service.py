@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.models.generated_file import GeneratedFile
 from app.models.project import Project
+from app.services.namespace_service import user_app_namespace
 
 
 def _image(project: Project, tag: str = "latest", github_username: str | None = None) -> str:
@@ -15,7 +16,7 @@ def build_files(project: Project, github_username: str | None = None) -> list[di
     owner = github_username or settings.GITHUB_USERNAME
     image = _image(project, github_username=github_username)
     app_name = project.name
-    namespace = project.namespace
+    namespace = user_app_namespace(getattr(project.environment, "value", project.environment), project.namespace)
     return [
         {"file_name": "Dockerfile.frontend", "file_path": "frontend/Dockerfile", "file_type": "docker", "content": "FROM node:22-alpine\nWORKDIR /app\nCOPY package*.json ./\nRUN npm ci\nCOPY . .\nRUN npm run build\nFROM nginx:1.27-alpine\nCOPY --from=0 /app/dist /usr/share/nginx/html\n"},
         {"file_name": "Dockerfile.backend", "file_path": "backend/Dockerfile", "file_type": "docker", "content": "FROM python:3.12-slim\nWORKDIR /app\nCOPY requirements.txt .\nRUN pip install --no-cache-dir -r requirements.txt\nCOPY . .\nCMD [\"uvicorn\", \"app.main:app\", \"--host\", \"0.0.0.0\", \"--port\", \"8000\"]\n"},

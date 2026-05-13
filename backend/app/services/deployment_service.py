@@ -9,6 +9,7 @@ from app.models.deployment import Deployment
 from app.models.generated_file import GeneratedFile
 from app.models.project import Project
 from app.models.user import User
+from app.services.namespace_service import user_app_namespace
 
 
 def deploy(db: Session, project: Project, user: User, image_tag: str, replicas: int) -> Deployment:
@@ -19,7 +20,7 @@ def deploy(db: Session, project: Project, user: User, image_tag: str, replicas: 
     deployment = Deployment(
         project_id=project.id,
         environment=project.environment.value,
-        namespace=project.namespace,
+        namespace=user_app_namespace(project.environment.value, project.namespace),
         image_name=settings.GHCR_IMAGE_FORMAT.replace("{project-name}", project.name).replace(":{tag}", ""),
         image_tag=image_tag,
         status="pending",

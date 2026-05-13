@@ -5,6 +5,7 @@ from app.core.config import settings
 from app.models.generated_file import GeneratedFile
 from app.models.project import Project
 from app.models.project_analysis import ProjectAnalysis
+from app.services.namespace_service import user_app_namespace
 
 
 def generate_from_analysis(db: Session, project: Project, analysis: ProjectAnalysis, options: dict | None = None, github_username: str | None = None) -> list[GeneratedFile]:
@@ -37,7 +38,7 @@ def regenerate_one_file(db: Session, project: Project, analysis: ProjectAnalysis
 def build_analysis_files(project: Project, analysis: ProjectAnalysis, options: dict, github_username: str | None = None) -> list[dict[str, str]]:
     app = project.name
     env = project.environment.value
-    namespace = settings.KUBERNETES_PRODUCTION_NAMESPACE if env == "prod" else settings.KUBERNETES_DEFAULT_NAMESPACE
+    namespace = user_app_namespace(env, project.namespace)
     frontend_path = analysis.frontend_path or "frontend"
     backend_path = analysis.backend_path or "backend"
     owner = github_username or settings.GHCR_USERNAME

@@ -19,6 +19,7 @@ import {
   TerminalSquare,
   UserCog,
   Users,
+  Wrench,
 } from 'lucide-react'
 
 export const roleRank = {
@@ -40,6 +41,7 @@ export const userNavItems = [
   { name: 'Monitoring', path: '/app/monitoring', icon: Activity, minRole: 'USER' },
   { name: 'Logs', path: '/app/logs', icon: TerminalSquare, minRole: 'USER' },
   { name: 'Incidents', path: '/app/incidents', icon: ShieldAlert, minRole: 'USER' },
+  { name: 'Healing Actions', path: '/app/healing-actions', icon: Wrench, minRole: 'USER' },
   { name: 'AI Assistant', path: '/app/ai-assistant', icon: Bot, minRole: 'USER' },
   { name: 'Security', path: '/app/security', icon: Lock, minRole: 'USER' },
   { name: 'Infrastructure', path: '/app/infrastructure', icon: ListTree, minRole: 'USER' },

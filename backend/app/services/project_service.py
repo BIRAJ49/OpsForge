@@ -7,11 +7,12 @@ from app.models.project import Project
 from app.models.user import User, UserRole
 from app.schemas.project import ProjectCreate, ProjectUpdate
 from app.utils.file_builder import normalize_project_name
+from app.services.namespace_service import user_app_namespace
 
 
 def create_project(db: Session, payload: ProjectCreate, user: User) -> Project:
     slug = normalize_project_name(payload.name)
-    namespace = settings.KUBERNETES_PRODUCTION_NAMESPACE if payload.environment.value == "prod" else settings.KUBERNETES_DEFAULT_NAMESPACE
+    namespace = user_app_namespace(payload.environment.value)
     data = payload.model_dump()
     data.pop("name", None)
     project = Project(
