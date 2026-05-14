@@ -53,7 +53,10 @@ def _send_resend_email(email: str, purpose: str, code: str) -> bool:
 
 
 def emit_email_code(email: str, purpose: str, code: str) -> None:
-    if settings.EMAIL_PROVIDER == "resend" and _send_resend_email(email, purpose, code):
+    if settings.EMAIL_PROVIDER == "resend":
+        if not _send_resend_email(email, purpose, code):
+            logger.error("Resend delivery failed; falling back to backend log for %s code to %s", purpose, email)
+            print(f"[OpsForge email:{purpose}] {email} code={code}")
         return
     if settings.EMAIL_PROVIDER == "console" or not settings.SMTP_HOST:
         logger.info("OpsForge %s code for %s: %s", purpose, email, code)

@@ -54,4 +54,4 @@ data:
   LOKI_DEFAULT_NAMESPACE: opsforge-system
   TRIVY_ENABLED: "true"
   TRIVY_PATH: trivy
-  EMAIL_PROVIDER: console
+  EMAIL_PROVIDER: resend
