@@ -131,10 +131,7 @@ export default function AuthPage({ mode = 'login', onAuthenticated }) {
   const [title, subtitle] = titles[view]
   const submitLabel = { login: 'Login', signup: 'Create account', verify: 'Verify email', forgot: 'Send reset code', reset: resetCodeVerified ? 'Update password' : 'Verify code' }[view]
   const helperActions = {
-    login: [
-      ['Verify email', 'verify'],
-      ['Reset password', 'forgot'],
-    ],
+    login: [['Reset password', 'forgot']],
     signup: [],
     verify: [['Back to login', 'login']],
     forgot: [
