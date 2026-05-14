@@ -107,18 +107,18 @@ def upload_status(project_id: int, db: Session = Depends(get_db), current_user=D
 
 @router.post("/import-from-github")
 def import_from_github(payload: GithubImportRequest, request: Request, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
-    project = create_project(
-        db,
-        ProjectCreate(name=payload.project_name, description=payload.description, app_type=AppType.fullstack, deployment_type=payload.deployment_type, environment=payload.environment, monitoring_enabled=payload.monitoring_enabled, security_scan_enabled=payload.security_scan_enabled, auto_healing_enabled=payload.auto_healing_enabled),
-        current_user,
-    )
-    project.github_repo_url = payload.github_repo_url
-    upload = UploadedProject(project_id=project.id, owner_id=current_user.id, upload_type=UploadType.github, github_repo_url=payload.github_repo_url, branch_name=payload.branch_name, status=UploadStatus.uploaded)
-    db.add(upload)
-    db.flush()
     root = None
     try:
         root = clone_github_repo(payload.github_repo_url, payload.branch_name, get_user_secret(db, "github", current_user))
+        project = create_project(
+            db,
+            ProjectCreate(name=payload.project_name, description=payload.description, app_type=AppType.fullstack, deployment_type=payload.deployment_type, environment=payload.environment, monitoring_enabled=payload.monitoring_enabled, security_scan_enabled=payload.security_scan_enabled, auto_healing_enabled=payload.auto_healing_enabled),
+            current_user,
+        )
+        project.github_repo_url = payload.github_repo_url
+        upload = UploadedProject(project_id=project.id, owner_id=current_user.id, upload_type=UploadType.github, github_repo_url=payload.github_repo_url, branch_name=payload.branch_name, status=UploadStatus.extracted)
+        db.add(upload)
+        db.flush()
         upload.status = UploadStatus.extracted
         analysis = analyze_project_path(db, project.id, current_user.id, root)
         upload.status = UploadStatus.analyzed
@@ -129,14 +129,10 @@ def import_from_github(payload: GithubImportRequest, request: Request, db: Sessi
         db.commit()
         return success_response("GitHub repo analyzed successfully", {"project": {"id": project.id, "name": project.name}, "analysis": ProjectAnalysisOut.model_validate(analysis).model_dump()}, 201)
     except HTTPException as exc:
-        upload.status = UploadStatus.failed
-        upload.error_message = str(exc.detail)
-        db.commit()
+        db.rollback()
         return error_response(str(exc.detail), "GITHUB_IMPORT_FAILED", exc.status_code)
     except Exception:
-        upload.status = UploadStatus.failed
-        upload.error_message = "GitHub import failed"
-        db.commit()
+        db.rollback()
         return error_response("GitHub import failed", "GITHUB_IMPORT_FAILED", 500)
     finally:
         if root:
