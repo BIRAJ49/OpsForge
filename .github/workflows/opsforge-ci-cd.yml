@@ -121,11 +121,18 @@ jobs:
           chmod 700 ~/.ssh
           printf '%s\n' "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/opsforge_ec2
           chmod 600 ~/.ssh/opsforge_ec2
-          ssh-keyscan -H "${{ secrets.EC2_HOST }}" >> ~/.ssh/known_hosts
+          EC2_HOST_VALUE="${{ secrets.EC2_HOST }}"
+          EC2_HOST_VALUE="${EC2_HOST_VALUE#*@}"
+          EC2_HOST_VALUE="${EC2_HOST_VALUE#http://}"
+          EC2_HOST_VALUE="${EC2_HOST_VALUE#https://}"
+          EC2_HOST_VALUE="${EC2_HOST_VALUE%%/*}"
+          printf '%s\n' "$EC2_HOST_VALUE" > ~/.ssh/opsforge_host
+          ssh-keyscan -H "$EC2_HOST_VALUE" >> ~/.ssh/known_hosts
 
       - name: Restart OpsForge deployments
         run: |
-          ssh -i ~/.ssh/opsforge_ec2 "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}" <<'EOF'
+          EC2_HOST_VALUE="$(cat ~/.ssh/opsforge_host)"
+          ssh -i ~/.ssh/opsforge_ec2 "ubuntu@${EC2_HOST_VALUE}" <<'EOF'
             set -euo pipefail
             kubectl rollout restart deployment/opsforge-backend -n opsforge-system
             kubectl rollout restart deployment/opsforge-frontend -n opsforge-system
