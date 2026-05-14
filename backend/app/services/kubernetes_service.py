@@ -2,11 +2,12 @@ from datetime import UTC, datetime
 from functools import cached_property
 from typing import Any
 
+import yaml
 from kubernetes import client, config
 from kubernetes.client import ApiException
 
 from app.core.config import settings
-from app.services.ai_service import ai_runtime_status, suggest_kubernetes_fix
+from app.services.ai_service import ai_runtime_status, sanitize_ai_text, suggest_detailed_kubernetes_fix, suggest_kubernetes_fix
 from app.services.rule_based_ai_service import analyze_text
 
 
@@ -258,6 +259,184 @@ class KubernetesService:
             if owner.kind == kind:
                 return owner
         return None
+
+    def _safe_log_lines(self, pod_name: str, namespace: str, container: str | None = None, previous: bool = False, tail_lines: int = 80) -> list[str]:
+        try:
+            logs = self.core.read_namespaced_pod_log(
+                name=pod_name,
+                namespace=namespace,
+                container=container,
+                previous=previous,
+                tail_lines=tail_lines,
+            )
+            return [sanitize_ai_text(line) for line in logs.splitlines()[-tail_lines:]]
+        except ApiException as exc:
+            return [f"Kubernetes log read failed: {exc.reason}"]
+        except Exception as exc:
+            return [f"Kubernetes log read failed: {str(exc)}"]
+
+    def _container_status_payload(self, pod) -> list[dict[str, Any]]:
+        payload = []
+        for status in pod.status.container_statuses or []:
+            state = "unknown"
+            reason = None
+            message = None
+            if status.state and status.state.waiting:
+                state = "waiting"
+                reason = status.state.waiting.reason
+                message = status.state.waiting.message
+            elif status.state and status.state.terminated:
+                state = "terminated"
+                reason = status.state.terminated.reason
+                message = status.state.terminated.message
+            elif status.state and status.state.running:
+                state = "running"
+            payload.append(
+                {
+                    "name": status.name,
+                    "image": status.image,
+                    "image_id": status.image_id,
+                    "ready": status.ready,
+                    "restart_count": status.restart_count,
+                    "state": state,
+                    "reason": reason,
+                    "message": sanitize_ai_text(message or ""),
+                }
+            )
+        return payload
+
+    def _deployment_for_pod(self, pod):
+        replica_set_owner = self._owner_reference(pod, "ReplicaSet")
+        if not replica_set_owner:
+            return None, None
+        replica_set = self.apps.read_namespaced_replica_set(name=replica_set_owner.name, namespace=pod.metadata.namespace)
+        deployment_owner = self._owner_reference(replica_set, "Deployment")
+        if not deployment_owner:
+            return replica_set_owner.name, None
+        deployment = self.apps.read_namespaced_deployment(name=deployment_owner.name, namespace=pod.metadata.namespace)
+        return replica_set_owner.name, deployment
+
+    def _deployment_yaml(self, deployment) -> str:
+        if not deployment:
+            return ""
+        serialized = client.ApiClient().sanitize_for_serialization(deployment)
+        metadata = serialized.get("metadata") or {}
+        metadata.pop("managedFields", None)
+        serialized["metadata"] = metadata
+        return sanitize_ai_text(yaml.safe_dump(serialized, sort_keys=False))[:7000]
+
+    def detailed_pod_ai_fix(self, pod_name: str, namespace: str | None = None) -> dict:
+        if not self._load_config():
+            return self._not_connected("pod_ai_fix")
+        try:
+            target_namespace = namespace or self._find_pod_namespace(pod_name)
+            if not target_namespace:
+                return {"status": "not_found", "pod_name": pod_name, "message": f"Pod {pod_name} was not found"}
+
+            pod = self.core.read_namespaced_pod(name=pod_name, namespace=target_namespace)
+            events = self.core.list_namespaced_event(
+                namespace=target_namespace,
+                field_selector=f"involvedObject.name={pod_name}",
+            ).items
+            event_payload = [
+                {
+                    "type": event.type,
+                    "reason": event.reason,
+                    "message": sanitize_ai_text(event.message or ""),
+                    "count": event.count,
+                    "last_seen": str(event.last_timestamp or event.event_time or ""),
+                }
+                for event in events[-8:]
+            ]
+            container_statuses = self._container_status_payload(pod)
+            primary_container = container_statuses[0]["name"] if container_statuses else None
+            current_logs = self._safe_log_lines(pod_name, target_namespace, container=primary_container, previous=False)
+            previous_logs = self._safe_log_lines(pod_name, target_namespace, container=primary_container, previous=True)
+            replica_set_name = None
+            deployment = None
+            deployment_error = None
+            try:
+                replica_set_name, deployment = self._deployment_for_pod(pod)
+            except Exception as exc:
+                deployment_error = str(exc)
+
+            status = self._pod_status(pod)
+            phase = pod.status.phase or "Unknown"
+            restarts = self._pod_restarts(pod)
+            ready = f"{self._pod_ready_count(pod)}/{self._pod_container_count(pod)}"
+            evidence = {
+                "pod": {
+                    "name": pod_name,
+                    "namespace": target_namespace,
+                    "status": status,
+                    "phase": phase,
+                    "ready": ready,
+                    "restarts": restarts,
+                    "node": pod.spec.node_name,
+                },
+                "containers": container_statuses,
+                "events": event_payload,
+                "logs": {
+                    "container": primary_container,
+                    "current_tail": current_logs,
+                    "previous_tail": previous_logs,
+                },
+                "owner": {
+                    "replica_set": replica_set_name,
+                    "deployment": deployment.metadata.name if deployment else None,
+                    "deployment_error": deployment_error,
+                },
+                "deployment_yaml": self._deployment_yaml(deployment),
+            }
+            evidence_text = "\n".join(
+                [
+                    f"Pod {pod_name} in namespace {target_namespace}",
+                    f"status={status}",
+                    f"phase={phase}",
+                    f"ready={ready}",
+                    f"restarts={restarts}",
+                    *[f"{event['type']} {event['reason']}: {event['message']}" for event in event_payload],
+                    *current_logs[-20:],
+                    *previous_logs[-20:],
+                ]
+            )
+            rule_analysis = analyze_text(evidence_text)
+            diagnostics = {}
+            ai_fix = suggest_detailed_kubernetes_fix(evidence, rule_analysis, diagnostics)
+            fallback = {
+                "likely_cause": rule_analysis["root_cause"],
+                "suggested_fix": rule_analysis["suggested_fix"],
+                "recommended_command": rule_analysis["recommended_command"].replace("<pod>", pod_name).replace("<namespace>", target_namespace),
+                "patch_preview": "",
+                "evidence_used": ["pod status", "container status", "recent events", "current logs", "previous logs", "deployment yaml"],
+                "risk_level": "medium",
+                "safe_to_execute": False,
+                "confidence": "medium",
+                "ai_provider": diagnostics.get("provider") or "rule_based",
+                "ai_model": diagnostics.get("selected_model"),
+            }
+            fix = ai_fix or fallback
+            return {
+                "status": "live",
+                "pod_name": pod_name,
+                "namespace": target_namespace,
+                "ai_assisted": bool(ai_fix),
+                "ai": diagnostics,
+                "fix": fix,
+                "evidence": {
+                    "pod": evidence["pod"],
+                    "containers": container_statuses,
+                    "events": event_payload,
+                    "current_log_lines": len(current_logs),
+                    "previous_log_lines": len(previous_logs),
+                    "deployment": evidence["owner"],
+                    "deployment_yaml_available": bool(evidence["deployment_yaml"]),
+                },
+            }
+        except ApiException as exc:
+            return {"status": "error", "pod_name": pod_name, "namespace": namespace, "message": exc.reason}
+        except Exception as exc:
+            return {"status": "error", "pod_name": pod_name, "namespace": namespace, "message": str(exc)}
 
     def pod_logs(self, pod_name: str) -> dict:
         if not self._load_config():

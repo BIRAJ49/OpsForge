@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { FileText, History, PlusCircle, RefreshCw, RotateCcw, ShieldAlert, X } from 'lucide-react'
+import { Clipboard, FileText, History, PlusCircle, RefreshCw, RotateCcw, ShieldAlert, Sparkles, X } from 'lucide-react'
 import { Card, CardHeader, CardContent } from '../components/ui/Card'
 import { StatusBadge } from '../components/ui/StatusBadge'
 import { Table } from '../components/ui/Table'
@@ -21,6 +21,8 @@ export default function Kubernetes() {
   const [incidentActionMessage, setIncidentActionMessage] = useState('')
   const [createdIncidentIds, setCreatedIncidentIds] = useState({})
   const [requestedRestartIds, setRequestedRestartIds] = useState({})
+  const [aiFixes, setAiFixes] = useState({})
+  const [aiFixLoadingIds, setAiFixLoadingIds] = useState({})
 
   useEffect(() => {
     async function loadKubernetes() {
@@ -178,6 +180,32 @@ export default function Kubernetes() {
     }
   }
 
+  async function analyzeIncidentFix(incident) {
+    setIncidentActionMessage('')
+    setAiFixLoadingIds((current) => ({ ...current, [incident.id]: true }))
+    try {
+      const result = unwrap(await api.post(
+        `/kubernetes/incidents/${encodeURIComponent(incident.pod_name)}/ai-fix`,
+        null,
+        { params: { namespace: incident.namespace } },
+      ))
+      setAiFixes((current) => ({ ...current, [incident.id]: result }))
+    } catch (error) {
+      setIncidentActionMessage(apiErrorMessage(error, 'Could not analyze AI fix'))
+    } finally {
+      setAiFixLoadingIds((current) => ({ ...current, [incident.id]: false }))
+    }
+  }
+
+  async function copyText(value, label = 'Text') {
+    try {
+      await navigator.clipboard.writeText(value || '')
+      setIncidentActionMessage(`${label} copied.`)
+    } catch {
+      setIncidentActionMessage('Could not copy to clipboard.')
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -306,7 +334,81 @@ export default function Kubernetes() {
                               </ul>
                             </div>
                           ) : null}
+                          {aiFixes[incident.id] ? (
+                            <div className="rounded-lg border border-cyan-400/30 bg-cyan-400/10 p-4">
+                              <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                                <div>
+                                  <p className="text-sm font-semibold text-cyan-100">
+                                    {aiFixes[incident.id].ai_assisted ? 'AI Fix Assistant' : 'Rule-based Fix Assistant'}
+                                  </p>
+                                  <p className="mt-1 text-xs text-cyan-100/70">
+                                    Evidence: logs, previous logs, events, container image status, and deployment YAML
+                                  </p>
+                                </div>
+                                <span className="rounded-full border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-300">
+                                  risk {aiFixes[incident.id].fix?.risk_level || 'medium'}
+                                </span>
+                              </div>
+                              <div className="mt-3 space-y-3 text-sm">
+                                <p><span className="text-cyan-100">Cause:</span> {aiFixes[incident.id].fix?.likely_cause}</p>
+                                <p><span className="text-cyan-100">Fix:</span> {aiFixes[incident.id].fix?.suggested_fix}</p>
+                                <div>
+                                  <div className="mb-2 flex items-center justify-between gap-3">
+                                    <p className="text-xs uppercase tracking-wide text-cyan-100/70">Recommended command</p>
+                                    <button
+                                      type="button"
+                                      onClick={() => copyText(aiFixes[incident.id].fix?.recommended_command, 'Command')}
+                                      className="inline-flex items-center gap-1 text-xs font-medium text-cyan-100 transition hover:text-white"
+                                    >
+                                      <Clipboard className="h-3.5 w-3.5" />
+                                      Copy
+                                    </button>
+                                  </div>
+                                  <pre className="custom-scrollbar overflow-auto rounded-md border border-cyan-400/20 bg-slate-950 p-3 text-xs text-cyan-50">{aiFixes[incident.id].fix?.recommended_command || 'No command suggested.'}</pre>
+                                </div>
+                                {aiFixes[incident.id].fix?.patch_preview ? (
+                                  <div>
+                                    <div className="mb-2 flex items-center justify-between gap-3">
+                                      <p className="text-xs uppercase tracking-wide text-cyan-100/70">Patch preview</p>
+                                      <button
+                                        type="button"
+                                        onClick={() => copyText(aiFixes[incident.id].fix?.patch_preview, 'Patch')}
+                                        className="inline-flex items-center gap-1 text-xs font-medium text-cyan-100 transition hover:text-white"
+                                      >
+                                        <Clipboard className="h-3.5 w-3.5" />
+                                        Copy
+                                      </button>
+                                    </div>
+                                    <pre className="custom-scrollbar max-h-52 overflow-auto rounded-md border border-cyan-400/20 bg-slate-950 p-3 text-xs text-slate-200">{aiFixes[incident.id].fix.patch_preview}</pre>
+                                  </div>
+                                ) : null}
+                                {aiFixes[incident.id].fix?.evidence_used?.length ? (
+                                  <div>
+                                    <p className="mb-2 text-xs uppercase tracking-wide text-cyan-100/70">Evidence used</p>
+                                    <div className="flex flex-wrap gap-2">
+                                      {aiFixes[incident.id].fix.evidence_used.map((item) => (
+                                        <span key={item} className="rounded-full border border-cyan-400/20 bg-slate-950 px-2 py-1 text-xs text-slate-300">{item}</span>
+                                      ))}
+                                    </div>
+                                  </div>
+                                ) : null}
+                                <p className="text-xs text-cyan-100/70">
+                                  Model: {aiFixes[incident.id].fix?.ai_model || 'rule-based'} · confidence {aiFixes[incident.id].fix?.confidence || 'medium'} · safe to execute {String(Boolean(aiFixes[incident.id].fix?.safe_to_execute))}
+                                </p>
+                              </div>
+                            </div>
+                          ) : null}
                           <div className="flex flex-wrap gap-2 pt-1">
+                            <Button
+                              size="sm"
+                              variant="secondary"
+                              icon={Sparkles}
+                              onClick={() => analyzeIncidentFix(incident)}
+                              loading={Boolean(aiFixLoadingIds[incident.id])}
+                              disabled={Boolean(aiFixLoadingIds[incident.id])}
+                            >
+                              {aiFixLoadingIds[incident.id] ? 'Analyzing...' : aiFixes[incident.id] ? 'Refresh AI Fix' : 'Analyze Fix'}
+                            </Button>
                             <Button
                               size="sm"
                               variant={createdIncidentIds[incident.id] ? 'secondary' : 'primary'}

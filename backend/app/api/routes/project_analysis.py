@@ -16,6 +16,7 @@ from app.schemas.project_analysis import (
     GenerateFromAnalysisRequest,
     GithubImportRequest,
     ProjectAnalysisOut,
+    ProjectProfileUpdateRequest,
     RegenerateFileRequest,
     UploadedProjectOut,
 )
@@ -177,6 +178,20 @@ def get_analysis(project_id: int, db: Session = Depends(get_db), current_user=De
     return success_response("Project analysis loaded", ProjectAnalysisOut.model_validate(analysis).model_dump())
 
 
+@router.put("/{project_id}/analysis/profile")
+def update_analysis_profile(project_id: int, payload: ProjectProfileUpdateRequest, request: Request, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    project = project_for_user(project_id, db, current_user)
+    analysis = latest_analysis(db, project_id)
+    if not analysis:
+        return error_response("Project analysis not found", "ANALYSIS_NOT_FOUND", 404)
+    analysis.analysis_json = {**(analysis.analysis_json or {}), "project_profile": payload.project_profile}
+    ip, ua = request_meta(request)
+    record_audit(db, user_id=current_user.id, action="Project profile update", resource_type="project", resource_id=project.id, ip_address=ip, user_agent=ua)
+    db.commit()
+    db.refresh(analysis)
+    return success_response("Project profile updated", ProjectAnalysisOut.model_validate(analysis).model_dump())
+
+
 @router.get("/{project_id}/analysis/files")
 def get_analysis_files(project_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     project_for_user(project_id, db, current_user)
@@ -193,7 +208,10 @@ def generate_files_from_analysis(project_id: int, request: Request, payload: Gen
     analysis = latest_analysis(db, project_id)
     if not analysis:
         return error_response("Project analysis not found", "ANALYSIS_NOT_FOUND", 404)
-    files = generate_from_analysis(db, project, analysis, (payload or GenerateFromAnalysisRequest()).model_dump(), get_user_config_value(db, "github", current_user, "login"))
+    options = (payload or GenerateFromAnalysisRequest()).model_dump()
+    if options.get("project_profile"):
+        analysis.analysis_json = {**(analysis.analysis_json or {}), "project_profile": options["project_profile"]}
+    files = generate_from_analysis(db, project, analysis, options, get_user_config_value(db, "github", current_user, "login"))
     ip, ua = request_meta(request)
     record_audit(db, user_id=current_user.id, action="DevOps files generated from analysis", resource_type="project", resource_id=project.id, ip_address=ip, user_agent=ua)
     db.commit()

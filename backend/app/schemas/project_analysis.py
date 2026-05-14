@@ -34,6 +34,11 @@ class GenerateFromAnalysisRequest(BaseModel):
     generate_readme: bool = True
     run_security_check: bool = True
     create_deployment_plan: bool = True
+    project_profile: dict | None = None
+
+
+class ProjectProfileUpdateRequest(BaseModel):
+    project_profile: dict
 
 
 class RegenerateFileRequest(BaseModel):

@@ -53,6 +53,9 @@ export const projectAnalyzerApi = {
   getProjectAnalysis(projectId) {
     return api.get(`/projects/${projectId}/analysis`)
   },
+  updateProjectProfile(projectId, projectProfile) {
+    return api.put(`/projects/${projectId}/analysis/profile`, { project_profile: projectProfile })
+  },
   getAnalysisFiles(projectId) {
     return api.get(`/projects/${projectId}/analysis/files`)
   },

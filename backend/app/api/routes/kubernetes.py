@@ -60,6 +60,15 @@ def analyze_cluster_incidents(request: Request, db: Session = Depends(get_db), c
     return success_response("Kubernetes incident analysis complete", result)
 
 
+@router.post("/incidents/{pod_name}/ai-fix")
+def analyze_incident_fix(pod_name: str, request: Request, namespace: str | None = None, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    result = kubernetes_service.detailed_pod_ai_fix(pod_name, namespace)
+    ip, ua = request_meta(request)
+    record_audit(db, user_id=current_user.id, action="Kubernetes AI fix analysis", resource_type="kubernetes", resource_id=pod_name, ip_address=ip, user_agent=ua)
+    db.commit()
+    return success_response("Kubernetes AI fix analysis complete", result)
+
+
 @router.get("/pods/{pod_name}/logs")
 def pod_logs(pod_name: str, current_user=Depends(get_current_user)):
     return success_response("Pod logs loaded", kubernetes_service.pod_logs(pod_name))
