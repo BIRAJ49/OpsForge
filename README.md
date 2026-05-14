@@ -75,9 +75,9 @@ Each generated file has an isolated preview page with copy and download actions.
 
 ### GitHub Actions CI/CD
 
-OpsForge includes a working GitHub Actions pipeline that tests the backend, builds the frontend, builds Docker images, and pushes platform images to GHCR.
+OpsForge includes a working GitHub Actions pipeline that tests the backend, builds the frontend, builds Docker images, pushes platform images to GHCR, and deploys the updated platform to K3s on EC2.
 
-![OpsForge GitHub Actions CI/CD](screenshoot/08-github-actions.png)
+![OpsForge GitHub Actions CI/CD deployment](screenshoot/08-github-actions-cd.png)
 
 ## Core Workflow
 
