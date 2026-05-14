@@ -115,6 +115,9 @@ jobs:
     if: github.event_name != 'pull_request'
 
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Configure SSH
         run: |
           mkdir -p ~/.ssh
@@ -129,11 +132,17 @@ jobs:
           printf '%s\n' "$EC2_HOST_VALUE" > ~/.ssh/opsforge_host
           ssh-keyscan -H "$EC2_HOST_VALUE" >> ~/.ssh/known_hosts
 
+      - name: Upload runtime config
+        run: |
+          EC2_HOST_VALUE="$(cat ~/.ssh/opsforge_host)"
+          scp -i ~/.ssh/opsforge_ec2 deploy/k8s/opsforge/configmap.yaml "ubuntu@${EC2_HOST_VALUE}:/tmp/opsforge-configmap.yaml"
+
       - name: Restart OpsForge deployments
         run: |
           EC2_HOST_VALUE="$(cat ~/.ssh/opsforge_host)"
           ssh -i ~/.ssh/opsforge_ec2 "ubuntu@${EC2_HOST_VALUE}" <<'EOF'
             set -euo pipefail
+            sudo kubectl apply -f /tmp/opsforge-configmap.yaml
             sudo kubectl rollout restart deployment/opsforge-backend -n opsforge-system
             sudo kubectl rollout restart deployment/opsforge-frontend -n opsforge-system
             sudo kubectl rollout status deployment/opsforge-backend -n opsforge-system --timeout=180s
