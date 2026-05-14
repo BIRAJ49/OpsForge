@@ -9,13 +9,19 @@ def test_registration_email_verification_login_refresh(client, monkeypatch):
     register = client.post("/api/auth/register", json={"name": "Dev User", "email": "dev@example.com", "password": "password-123"})
     assert register.status_code == 201
 
+    repeat_register = client.post("/api/auth/register", json={"name": "Dev User", "email": "dev@example.com", "password": "new-password-123"})
+    assert repeat_register.status_code == 201
+
     blocked_login = client.post("/api/auth/login", json={"email": "dev@example.com", "password": "password-123"})
+    assert blocked_login.status_code == 401
+
+    blocked_login = client.post("/api/auth/login", json={"email": "dev@example.com", "password": "new-password-123"})
     assert blocked_login.status_code == 403
 
     verify = client.post("/api/auth/verify-email", json={"email": "dev@example.com", "code": "123456"})
     assert verify.status_code == 200
 
-    login = client.post("/api/auth/login", json={"email": "dev@example.com", "password": "password-123"})
+    login = client.post("/api/auth/login", json={"email": "dev@example.com", "password": "new-password-123"})
     assert login.status_code == 200
     refresh_token = login.json()["data"]["refresh_token"]
 

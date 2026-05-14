@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { FileCode2 } from 'lucide-react'
 import { api, apiErrorMessage, unwrap } from '../../services/api'
@@ -13,7 +13,33 @@ export default function AuthPage({ mode = 'login', onAuthenticated }) {
   const [pendingEmail, setPendingEmail] = useState('')
   const [resetCode, setResetCode] = useState('')
   const [resetCodeVerified, setResetCodeVerified] = useState(false)
+  const [verificationCooldown, setVerificationCooldown] = useState(0)
+  const [resendLoading, setResendLoading] = useState(false)
   const [loading, setLoading] = useState(false)
+
+  useEffect(() => {
+    if (!verificationCooldown) return undefined
+    const timer = window.setInterval(() => {
+      setVerificationCooldown((seconds) => Math.max(0, seconds - 1))
+    }, 1000)
+    return () => window.clearInterval(timer)
+  }, [verificationCooldown])
+
+  function showVerification(email, nextMessage, cooldownSeconds = 0) {
+    setPendingEmail(email)
+    setView('verify')
+    setMessage(nextMessage)
+    setVerificationCooldown(cooldownSeconds)
+  }
+
+  function switchView(nextView) {
+    setError('')
+    setMessage('')
+    setResetCode('')
+    setResetCodeVerified(false)
+    if (nextView !== 'verify') setVerificationCooldown(0)
+    setView(nextView)
+  }
 
   async function submit(event) {
     event.preventDefault()
@@ -24,13 +50,13 @@ export default function AuthPage({ mode = 'login', onAuthenticated }) {
       if (view === 'signup') {
         const password = form.get('password')
         if (password !== form.get('confirm_password')) throw new Error('Passwords do not match')
-        await api.post('/auth/register', { name: form.get('name'), email: form.get('email'), password })
-        setPendingEmail(form.get('email'))
-        setView('verify')
-        setMessage('Account created. Enter the 6-digit verification code from email or backend logs.')
+        const email = form.get('email')
+        await api.post('/auth/register', { name: form.get('name'), email, password })
+        showVerification(email, 'Verification code sent. Enter the 6-digit code from your email.', 30)
       } else if (view === 'verify') {
         await api.post('/auth/verify-email', { email: form.get('email'), code: form.get('code') })
-        setView('login')
+        setVerificationCooldown(0)
+        switchView('login')
         setMessage('Email verified. You can login now.')
       } else if (view === 'forgot') {
         await api.post('/auth/forgot-password', { email: form.get('email') })
@@ -56,7 +82,8 @@ export default function AuthPage({ mode = 'login', onAuthenticated }) {
         setView('login')
         setMessage('Password reset successful. Login with the new password.')
       } else {
-        const data = unwrap(await api.post('/auth/login', { email: form.get('email'), password: form.get('password') }))
+        const email = form.get('email')
+        const data = unwrap(await api.post('/auth/login', { email, password: form.get('password') }))
         localStorage.setItem('opsforge_access_token', data.access_token)
         localStorage.setItem('opsforge_refresh_token', data.refresh_token)
         localStorage.setItem('opsforge_user', JSON.stringify(data.user))
@@ -64,9 +91,33 @@ export default function AuthPage({ mode = 'login', onAuthenticated }) {
         navigate(data.user.role === 'ADMIN' ? '/admin/dashboard' : '/dashboard')
       }
     } catch (err) {
-      setError(apiErrorMessage(err))
+      const nextError = apiErrorMessage(err)
+      if (view === 'login' && nextError === 'Email verification required') {
+        showVerification(new FormData(event.currentTarget).get('email'), 'Email verification is required. Enter your code or request a new one.')
+      } else {
+        setError(nextError)
+      }
     } finally {
       setLoading(false)
+    }
+  }
+
+  async function resendVerificationCode() {
+    const email = pendingEmail.trim()
+    if (!email) {
+      setError('Enter your email before requesting a new code.')
+      return
+    }
+    setResendLoading(true)
+    setError('')
+    try {
+      await api.post('/auth/resend-verification-code', { email })
+      setMessage('New verification code sent. Check your email.')
+      setVerificationCooldown(30)
+    } catch (err) {
+      setError(apiErrorMessage(err, 'Could not resend verification code'))
+    } finally {
+      setResendLoading(false)
     }
   }
 
@@ -80,7 +131,10 @@ export default function AuthPage({ mode = 'login', onAuthenticated }) {
   const [title, subtitle] = titles[view]
   const submitLabel = { login: 'Login', signup: 'Create account', verify: 'Verify email', forgot: 'Send reset code', reset: resetCodeVerified ? 'Update password' : 'Verify code' }[view]
   const helperActions = {
-    login: [['Reset password', 'forgot']],
+    login: [
+      ['Verify email', 'verify'],
+      ['Reset password', 'forgot'],
+    ],
     signup: [],
     verify: [['Back to login', 'login']],
     forgot: [
@@ -114,7 +168,17 @@ export default function AuthPage({ mode = 'login', onAuthenticated }) {
             ) : null}
             <label className="block space-y-2">
               <span className="text-sm text-slate-300">Email</span>
-              <input name="email" type="email" required defaultValue={pendingEmail} readOnly={view === 'reset' && resetCodeVerified} className="h-12 w-full rounded-md border border-slate-700 bg-slate-900 px-3 text-slate-100 outline-none transition read-only:cursor-not-allowed read-only:opacity-70 focus:border-cyan-400 focus:bg-slate-950" />
+              <input
+                key={view}
+                name="email"
+                type="email"
+                required
+                value={['verify'].includes(view) ? pendingEmail : undefined}
+                defaultValue={view === 'verify' ? undefined : pendingEmail}
+                onChange={view === 'verify' ? (event) => setPendingEmail(event.target.value) : undefined}
+                readOnly={view === 'reset' && resetCodeVerified}
+                className="h-12 w-full rounded-md border border-slate-700 bg-slate-900 px-3 text-slate-100 outline-none transition read-only:cursor-not-allowed read-only:opacity-70 focus:border-cyan-400 focus:bg-slate-950"
+              />
             </label>
             {view === 'verify' || (view === 'reset' && !resetCodeVerified) ? (
               <label className="block space-y-2">
@@ -139,17 +203,26 @@ export default function AuthPage({ mode = 'login', onAuthenticated }) {
             </Button>
           </form>
           <div className="mt-5 space-y-4">
+            {view === 'verify' ? (
+              <div className="flex flex-col items-center gap-2 text-center text-sm text-slate-400">
+                <span>Didn&apos;t receive the code?</span>
+                <button
+                  type="button"
+                  onClick={resendVerificationCode}
+                  disabled={resendLoading || loading || verificationCooldown > 0}
+                  className="font-semibold text-cyan-200 transition hover:text-cyan-100 disabled:cursor-not-allowed disabled:text-slate-500"
+                >
+                  {resendLoading ? 'Sending...' : verificationCooldown > 0 ? `Resend code in ${verificationCooldown}s` : 'Resend code'}
+                </button>
+              </div>
+            ) : null}
             {view === 'login' ? (
               <div className="text-center text-sm text-slate-400">
                 Don&apos;t have an account yet?{' '}
                 <button
                   type="button"
                   onClick={() => {
-                    setError('')
-                    setMessage('')
-                    setResetCode('')
-                    setResetCodeVerified(false)
-                    setView('signup')
+                    switchView('signup')
                   }}
                   className="font-semibold text-cyan-200 transition hover:text-cyan-100"
                 >
@@ -163,11 +236,7 @@ export default function AuthPage({ mode = 'login', onAuthenticated }) {
                 <button
                   type="button"
                   onClick={() => {
-                    setError('')
-                    setMessage('')
-                    setResetCode('')
-                    setResetCodeVerified(false)
-                    setView('login')
+                    switchView('login')
                   }}
                   className="font-semibold text-cyan-200 transition hover:text-cyan-100"
                 >
@@ -180,13 +249,7 @@ export default function AuthPage({ mode = 'login', onAuthenticated }) {
                 <button
                   key={nextView}
                   type="button"
-                  onClick={() => {
-                    setError('')
-                    setMessage('')
-                    setResetCode('')
-                    setResetCodeVerified(false)
-                    setView(nextView)
-                  }}
+                  onClick={() => switchView(nextView)}
                   className="text-sm font-medium text-slate-400 transition hover:text-cyan-100"
                 >
                   {label}

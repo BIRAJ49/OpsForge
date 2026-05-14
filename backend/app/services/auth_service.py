@@ -34,7 +34,12 @@ def create_token_pair(db: Session, user: User) -> dict:
 def register(db: Session, payload: RegisterRequest) -> User:
     existing = db.scalar(select(User).where(User.email == payload.email.lower()))
     if existing:
-        raise HTTPException(status_code=409, detail="Email already registered")
+        if existing.is_verified:
+            raise HTTPException(status_code=409, detail="Email already registered")
+        existing.name = payload.name
+        existing.password_hash = hash_password(payload.password)
+        create_email_code(db, existing)
+        return existing
     user = User(name=payload.name, email=payload.email.lower(), password_hash=hash_password(payload.password), role=UserRole.USER)
     db.add(user)
     db.flush()

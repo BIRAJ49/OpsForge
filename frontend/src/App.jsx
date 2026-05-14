@@ -142,6 +142,7 @@ function RouteTransitions({ user, onAuthenticated, onLogout }) {
             <Route path="/result/:id" element={user?.role === 'ADMIN' ? <Navigate to="/admin/generated-projects" replace /> : <ResultPage />} />
             <Route path="/login" element={<AuthPage key="login" mode="login" onAuthenticated={onAuthenticated} />} />
             <Route path="/signup" element={<AuthPage key="signup" mode="signup" onAuthenticated={onAuthenticated} />} />
+            <Route path="/verify-email" element={<AuthPage key="verify" mode="verify" onAuthenticated={onAuthenticated} />} />
             <Route path="/forgot-password" element={<AuthPage key="forgot" mode="forgot" onAuthenticated={onAuthenticated} />} />
             <Route path="/reset-password" element={<AuthPage key="reset" mode="reset" onAuthenticated={onAuthenticated} />} />
 
