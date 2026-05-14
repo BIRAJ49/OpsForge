@@ -155,7 +155,7 @@ function RouteTransitions({ user, onAuthenticated, onLogout }) {
             <Route path="/app/project-analysis" element={<ProtectedRoute user={user} userOnly><DashboardLayout user={user}><ProjectAnalysis /></DashboardLayout></ProtectedRoute>} />
             <Route path="/app/projects/:projectId/analysis" element={<ProtectedRoute user={user} userOnly><DashboardLayout user={user}><ProjectAnalysis /></DashboardLayout></ProtectedRoute>} />
             <Route path="/app/devops-generator" element={<ProtectedRoute user={user} userOnly><DashboardLayout user={user}><DevOpsGenerator /></DashboardLayout></ProtectedRoute>} />
-            <Route path="/app/connect-github" element={<ProtectedRoute user={user} userOnly><DashboardLayout user={user}><ConnectGitHub /></DashboardLayout></ProtectedRoute>} />
+            <Route path="/app/connect-github" element={<ProtectedRoute user={user}><DashboardLayout user={user}><ConnectGitHub /></DashboardLayout></ProtectedRoute>} />
             <Route path="/app/generated-files" element={<ProtectedRoute user={user} userOnly><DashboardLayout user={user}><GeneratedFiles /></DashboardLayout></ProtectedRoute>} />
             <Route path="/app/generated-files/:fileId" element={<ProtectedRoute user={user} userOnly><DashboardLayout user={user}><GeneratedFilePreview /></DashboardLayout></ProtectedRoute>} />
             <Route path="/app/deployments" element={<ProtectedRoute user={user} userOnly><DashboardLayout user={user}><Deployments /></DashboardLayout></ProtectedRoute>} />

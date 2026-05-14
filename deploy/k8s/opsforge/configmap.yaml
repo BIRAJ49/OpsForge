@@ -8,8 +8,8 @@ data:
   APP_ENV: production
   APP_DEBUG: "false"
   API_PREFIX: /api
-  CORS_ORIGINS: http://52.5.222.110
-  FRONTEND_URL: http://52.5.222.110
+  CORS_ORIGINS: https://opsforge.birajadhikari49.com.np,http://52.5.222.110
+  FRONTEND_URL: https://opsforge.birajadhikari49.com.np
   ACCESS_TOKEN_EXPIRE_MINUTES: "1440"
   REFRESH_TOKEN_EXPIRE_DAYS: "30"
   GITHUB_CLIENT_MODE: oauth
@@ -17,12 +17,12 @@ data:
   GITHUB_DEFAULT_BRANCH: main
   GITHUB_PROJECT_REPO_FORMAT: opsforge-{project-name}
   GITHUB_GITOPS_REPO: opsforge-gitops
-  GITHUB_OAUTH_REDIRECT_URI: http://52.5.222.110/api/integrations/github/oauth/callback
+  GITHUB_OAUTH_REDIRECT_URI: https://opsforge.birajadhikari49.com.np/api/integrations/github/oauth/callback
   GHCR_REGISTRY: ghcr.io
   GHCR_USERNAME: biraj49
   GHCR_IMAGE_FORMAT: ghcr.io/biraj49/{project-name}:{tag}
   KUBERNETES_MODE: incluster
-  KUBERNETES_DEFAULT_NAMESPACE: opsforge-system
+  KUBERNETES_DEFAULT_NAMESPACE: opsforge
   KUBERNETES_PRODUCTION_NAMESPACE: opsforge-prod
   KUBERNETES_PRODUCTION_TYPE: k3s-ec2
   ARGOCD_SERVER: https://argocd-server.argocd.svc.cluster.local
