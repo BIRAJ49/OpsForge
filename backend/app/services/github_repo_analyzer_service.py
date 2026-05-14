@@ -25,7 +25,7 @@ def _clone_env(token: str | None) -> dict[str, str] | None:
     return env
 
 
-def clone_github_repo(repo_url: str, branch_name: str = "main", token: str | None = None) -> Path:
+def clone_github_repo(repo_url: str, branch_name: str | None = None, token: str | None = None) -> Path:
     if not settings.ALLOW_GITHUB_IMPORT:
         raise HTTPException(status_code=403, detail="GitHub import is disabled")
     match = GITHUB_RE.match(repo_url)
@@ -35,13 +35,20 @@ def clone_github_repo(repo_url: str, branch_name: str = "main", token: str | Non
         raise HTTPException(status_code=503, detail="Git is not installed in the backend runtime")
     owner, repo = match.groups()
     clone_url = f"https://github.com/{owner}/{repo}.git"
-    branch = branch_name or "main"
+    branch = branch_name.strip() if branch_name else ""
     upload_root = Path(settings.UPLOAD_TEMP_DIR)
     upload_root.mkdir(parents=True, exist_ok=True)
     temp_dir = Path(tempfile.mkdtemp(prefix="analysis-", dir=upload_root))
     target = temp_dir / "repo"
-    cmd = ["git", "clone", "--depth", "1", "--branch", branch, clone_url, str(target)]
+    cmd = ["git", "clone", "--depth", "1", clone_url, str(target)]
+    if branch:
+        cmd = ["git", "clone", "--depth", "1", "--branch", branch, clone_url, str(target)]
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=90, check=False, env=_clone_env(token))
+    if result.returncode != 0 and branch:
+        stderr = (result.stderr or "").lower()
+        if "remote branch" in stderr and "not found" in stderr:
+            shutil.rmtree(target, ignore_errors=True)
+            result = subprocess.run(["git", "clone", "--depth", "1", clone_url, str(target)], capture_output=True, text=True, timeout=90, check=False, env=_clone_env(token))
     if result.returncode != 0:
         shutil.rmtree(temp_dir, ignore_errors=True)
         stderr = (result.stderr or "").lower()

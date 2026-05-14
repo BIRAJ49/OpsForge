@@ -10,7 +10,7 @@ class GithubImportRequest(BaseModel):
     project_name: str = Field(min_length=2, max_length=120)
     description: str | None = None
     github_repo_url: str
-    branch_name: str = "main"
+    branch_name: str | None = None
     environment: Environment = Environment.dev
     deployment_type: DeploymentType = DeploymentType.gitops
     monitoring_enabled: bool = True
@@ -21,7 +21,7 @@ class GithubImportRequest(BaseModel):
 
 class AnalyzeGithubRequest(BaseModel):
     github_repo_url: str | None = None
-    branch_name: str = "main"
+    branch_name: str | None = None
 
 
 class GenerateFromAnalysisRequest(BaseModel):

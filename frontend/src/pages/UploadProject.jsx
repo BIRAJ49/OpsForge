@@ -35,7 +35,7 @@ export default function UploadProject() {
           project_name: form.get('project_name'),
           description: form.get('description') || null,
           github_repo_url: form.get('github_repo_url'),
-          branch_name: form.get('branch_name') || 'main',
+          branch_name: form.get('branch_name')?.trim() || null,
           environment: form.get('environment'),
           deployment_type: form.get('deployment_type'),
           monitoring_enabled: form.get('monitoring_enabled') === 'on',
@@ -102,7 +102,7 @@ export default function UploadProject() {
             )}
             <label className="space-y-2">
               <span className="text-sm text-slate-300">Branch name</span>
-              <input name="branch_name" defaultValue="main" className="h-11 w-full rounded-md border border-slate-700 bg-slate-950 px-3 text-slate-100 outline-none focus:border-cyan-400" />
+              <input name="branch_name" placeholder="Leave blank to use the repo default branch" className="h-11 w-full rounded-md border border-slate-700 bg-slate-950 px-3 text-slate-100 outline-none focus:border-cyan-400" />
             </label>
             <label className="space-y-2">
               <span className="text-sm text-slate-300">Environment</span>
