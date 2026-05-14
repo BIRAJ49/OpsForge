@@ -134,8 +134,8 @@ jobs:
           EC2_HOST_VALUE="$(cat ~/.ssh/opsforge_host)"
           ssh -i ~/.ssh/opsforge_ec2 "ubuntu@${EC2_HOST_VALUE}" <<'EOF'
             set -euo pipefail
-            kubectl rollout restart deployment/opsforge-backend -n opsforge-system
-            kubectl rollout restart deployment/opsforge-frontend -n opsforge-system
-            kubectl rollout status deployment/opsforge-backend -n opsforge-system --timeout=180s
-            kubectl rollout status deployment/opsforge-frontend -n opsforge-system --timeout=180s
+            sudo kubectl rollout restart deployment/opsforge-backend -n opsforge-system
+            sudo kubectl rollout restart deployment/opsforge-frontend -n opsforge-system
+            sudo kubectl rollout status deployment/opsforge-backend -n opsforge-system --timeout=180s
+            sudo kubectl rollout status deployment/opsforge-frontend -n opsforge-system --timeout=180s
           EOF
