@@ -71,6 +71,46 @@ def test_zip_upload_success_analysis_and_generation(client):
     assert "docs/risk-report.md" in paths
 
 
+def test_generation_options_filter_selected_files(client):
+    token = _verified_user_token(client, "filtered-generation@example.com")
+    response = client.post(
+        "/api/projects/upload",
+        headers={"Authorization": f"Bearer {token}"},
+        data={"project_name": "Filtered App", "environment": "dev", "deployment_type": "gitops", "upload_type": "zip"},
+        files={"file": ("app.zip", _sample_project_zip(), "application/zip")},
+    )
+    project_id = response.json()["data"]["project"]["id"]
+    generated = client.post(
+        f"/api/projects/{project_id}/generate-from-analysis",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "generate_docker": True,
+            "generate_compose": False,
+            "generate_kubernetes": False,
+            "generate_helm": False,
+            "generate_github_actions": True,
+            "generate_argocd": True,
+            "generate_terraform": False,
+            "generate_env": True,
+            "generate_readme": True,
+            "run_security_check": False,
+            "create_deployment_plan": False,
+        },
+    )
+    assert generated.status_code == 200
+    paths = {item["file_path"] for item in generated.json()["data"]}
+    assert "frontend/Dockerfile" in paths
+    assert "backend/Dockerfile" in paths
+    assert ".github/workflows/ci-cd.yml" in paths
+    assert ".env.example" in paths
+    assert "README.md" in paths
+    assert "docker-compose.yml" not in paths
+    assert "argocd/application.yaml" not in paths
+    assert "k8s/backend-deployment.yaml" not in paths
+    assert "terraform/main.tf" not in paths
+    assert "security/trivy.yaml" not in paths
+
+
 def test_invalid_zip_rejection(client):
     token = _verified_user_token(client, "invalidzip@example.com")
     response = client.post(

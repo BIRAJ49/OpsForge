@@ -26,11 +26,13 @@ class AnalyzeGithubRequest(BaseModel):
 
 class GenerateFromAnalysisRequest(BaseModel):
     generate_docker: bool = True
+    generate_compose: bool = True
     generate_kubernetes: bool = True
     generate_helm: bool = True
     generate_github_actions: bool = True
     generate_argocd: bool = True
     generate_terraform: bool = True
+    generate_env: bool = True
     generate_readme: bool = True
     run_security_check: bool = True
     create_deployment_plan: bool = True

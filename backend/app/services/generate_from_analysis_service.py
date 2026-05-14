@@ -53,7 +53,7 @@ def build_analysis_files(project: Project, analysis: ProjectAnalysis, options: d
     frontend_image = f"ghcr.io/{owner}/{app}-frontend:latest"
     backend_image = f"ghcr.io/{owner}/{app}-backend:latest"
     backend_start = backend_profile.get("start_command") or (analysis.start_commands or {}).get("backend", "uvicorn app.main:app --host 0.0.0.0 --port 8000")
-    return [
+    specs = [
         _file("Dockerfile.frontend", f"{frontend_path}/Dockerfile", "docker", f"FROM node:22-alpine AS build\nWORKDIR /app\nCOPY package*.json ./\nRUN {frontend_install}\nCOPY . .\nRUN {frontend_build}\n\nFROM nginx:1.27-alpine\nCOPY --from=build /app/{frontend_output} /usr/share/nginx/html\nEXPOSE 80\nCMD [\"nginx\", \"-g\", \"daemon off;\"]\n"),
         _file("Dockerfile.backend", f"{backend_path}/Dockerfile", "docker", _backend_dockerfile(backend_profile, backend_install, backend_start, backend_port)),
         _file("docker-compose.yml", "docker-compose.yml", "compose", f"services:\n  frontend:\n    build: ./{frontend_path}\n    ports: [\"5173:80\"]\n    depends_on: [backend]\n  backend:\n    build: ./{backend_path}\n    env_file: .env\n    ports: [\"{backend_port}:{backend_port}\"]\n    depends_on:\n      postgres:\n        condition: service_healthy\n      redis:\n        condition: service_started\n  postgres:\n    image: postgres:16-alpine\n    environment:\n      POSTGRES_DB: {app}\n      POSTGRES_USER: postgres\n      POSTGRES_PASSWORD: postgres\n    volumes: [\"postgres-data:/var/lib/postgresql/data\"]\n    healthcheck:\n      test: [\"CMD-SHELL\", \"pg_isready -U postgres\"]\n      interval: 10s\n      timeout: 5s\n      retries: 5\n  redis:\n    image: redis:7-alpine\nvolumes:\n  postgres-data:\n"),
@@ -77,10 +77,41 @@ def build_analysis_files(project: Project, analysis: ProjectAnalysis, options: d
         _file("deployment-plan.md", "docs/deployment-plan.md", "docs", f"# Deployment Plan\n\nEnvironment: {env}\nTarget namespace: {namespace}\nStrategy: {analysis.recommended_deployment_strategy}\n\n1. Review generated files.\n2. Configure secrets.\n3. Build and push GHCR images.\n4. Apply GitOps manifests.\n5. Validate probes, logs, and security scan results.\n"),
         _file("risk-report.md", "docs/risk-report.md", "docs", f"# Risk Report\n\nRisk score: {analysis.risk_score}\n\nWarnings:\n" + "\n".join(f"- {item}" for item in analysis.security_warnings)),
     ]
+    return [spec for spec in specs if _selected(spec, options)]
 
 
 def _file(file_name: str, file_path: str, file_type: str, content: str) -> dict[str, str]:
     return {"file_name": file_name, "file_path": file_path, "file_type": file_type, "content": content}
+
+
+def _selected(spec: dict[str, str], options: dict) -> bool:
+    path = spec["file_path"]
+    file_type = spec["file_type"]
+    if file_type == "docker":
+        return bool(options.get("generate_docker", True))
+    if file_type == "compose":
+        return bool(options.get("generate_compose", True))
+    if file_type == "env":
+        return bool(options.get("generate_env", True))
+    if file_type == "github_actions":
+        return bool(options.get("generate_github_actions", True))
+    if file_type == "kubernetes":
+        return bool(options.get("generate_kubernetes", True))
+    if file_type == "helm":
+        return bool(options.get("generate_helm", True))
+    if file_type == "argocd":
+        return bool(options.get("generate_argocd", True)) and bool(options.get("generate_kubernetes", True))
+    if file_type == "terraform":
+        return bool(options.get("generate_terraform", True))
+    if file_type == "security":
+        return bool(options.get("run_security_check", True))
+    if path == "README.md":
+        return bool(options.get("generate_readme", True))
+    if path == "docs/deployment-plan.md":
+        return bool(options.get("create_deployment_plan", True))
+    if path == "docs/risk-report.md":
+        return bool(options.get("run_security_check", True))
+    return True
 
 
 def _deployment(app: str, component: str, namespace: str, image: str, port: int) -> str:

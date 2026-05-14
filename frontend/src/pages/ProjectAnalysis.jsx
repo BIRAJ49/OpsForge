@@ -8,6 +8,40 @@ import { api, apiErrorMessage, projectAnalyzerApi, unwrap } from '../services/ap
 
 const progressSteps = ['Uploading project', 'Extracting files', 'Scanning project structure', 'Detecting stack', 'Masking secrets', 'Generating recommendations', 'Generating DevOps files', 'Completed']
 
+const defaultGenerationOptions = {
+  generate_docker: true,
+  generate_compose: true,
+  generate_kubernetes: true,
+  generate_helm: true,
+  generate_github_actions: true,
+  generate_argocd: true,
+  generate_terraform: true,
+  generate_env: true,
+  generate_readme: true,
+  run_security_check: true,
+  create_deployment_plan: true,
+}
+
+const generationOptionGroups = [
+  ['Runtime', [
+    ['generate_docker', 'Dockerfiles', 'Backend and frontend container build files.'],
+    ['generate_compose', 'Docker Compose', 'Local multi-service runtime file.'],
+    ['generate_env', '.env.example', 'Safe placeholder environment template.'],
+  ]],
+  ['Delivery', [
+    ['generate_github_actions', 'GitHub Actions CI/CD', 'Build, test, scan, and push images.'],
+    ['generate_kubernetes', 'Kubernetes YAML', 'Namespace, deployments, services, ingress, HPA, config, and secrets.'],
+    ['generate_argocd', 'Argo CD Application', 'GitOps application manifest. Requires Kubernetes YAML.'],
+    ['generate_helm', 'Helm chart', 'Chart skeleton for packaged Kubernetes delivery.'],
+    ['generate_terraform', 'Terraform', 'Starter AWS infrastructure files.'],
+  ]],
+  ['Documentation and security', [
+    ['run_security_check', 'Security files', 'Trivy config and risk report.'],
+    ['generate_readme', 'README', 'Deployment and usage guide.'],
+    ['create_deployment_plan', 'Deployment plan', 'Step-by-step rollout notes.'],
+  ]],
+]
+
 function CodeBlock({ value }) {
   return <pre className="max-h-64 overflow-auto rounded-md border border-slate-800 bg-slate-950 p-4 text-xs leading-5 text-slate-300">{JSON.stringify(value || {}, null, 2)}</pre>
 }
@@ -23,6 +57,7 @@ export default function ProjectAnalysis() {
   const [generating, setGenerating] = useState(false)
   const [profile, setProfile] = useState(null)
   const [savingProfile, setSavingProfile] = useState(false)
+  const [generationOptions, setGenerationOptions] = useState(defaultGenerationOptions)
 
   useEffect(() => {
     async function load() {
@@ -54,7 +89,7 @@ export default function ProjectAnalysis() {
     setGenerating(true)
     setMessage('')
     try {
-      await projectAnalyzerApi.generateFromAnalysis(projectId, { project_profile: profile })
+      await projectAnalyzerApi.generateFromAnalysis(projectId, { ...generationOptions, project_profile: profile })
       localStorage.setItem('opsforge_last_project_id', projectId)
       navigate('/app/generated-files')
     } catch (error) {
@@ -62,6 +97,19 @@ export default function ProjectAnalysis() {
     } finally {
       setGenerating(false)
     }
+  }
+
+  function updateGenerationOption(key, value) {
+    setGenerationOptions((current) => {
+      const next = { ...current, [key]: value }
+      if (key === 'generate_argocd' && value) {
+        next.generate_kubernetes = true
+      }
+      if (key === 'generate_kubernetes' && !value) {
+        next.generate_argocd = false
+      }
+      return next
+    })
   }
 
   function updateProfile(path, value) {
@@ -197,6 +245,37 @@ export default function ProjectAnalysis() {
               </CardContent>
             </Card>
           ) : null}
+          <Card>
+            <CardHeader title="Files to generate" description="Choose exactly which DevOps files OpsForge should create from the AI-assisted project profile." />
+            <CardContent>
+              <div className="grid gap-5 xl:grid-cols-3">
+                {generationOptionGroups.map(([group, options]) => (
+                  <div key={group} className="rounded-lg border border-slate-800 bg-slate-950/50 p-4">
+                    <h3 className="font-semibold text-white">{group}</h3>
+                    <div className="mt-4 grid gap-3">
+                      {options.map(([key, label, description]) => (
+                        <label key={key} className="flex items-start gap-3 rounded-md border border-slate-800 bg-slate-900/60 p-3 text-sm text-slate-300">
+                          <input
+                            type="checkbox"
+                            checked={Boolean(generationOptions[key])}
+                            onChange={(event) => updateGenerationOption(key, event.target.checked)}
+                            className="mt-1 h-4 w-4 accent-cyan-400"
+                          />
+                          <span>
+                            <span className="block font-medium text-slate-100">{label}</span>
+                            <span className="mt-1 block text-xs leading-5 text-slate-500">{description}</span>
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-4 rounded-md border border-cyan-400/20 bg-cyan-400/10 p-3 text-sm text-cyan-100">
+                Selected files are the only files created. Push to GitHub will push only this generated set.
+              </div>
+            </CardContent>
+          </Card>
           <div className="grid gap-6 xl:grid-cols-2">
             <Card><CardHeader title="Existing DevOps files" /><CardContent><List values={analysis.existing_devops_files} empty="No existing DevOps files detected" /></CardContent></Card>
             <Card><CardHeader title="Missing DevOps files" /><CardContent><List values={analysis.missing_devops_files} empty="No missing files detected" /></CardContent></Card>
