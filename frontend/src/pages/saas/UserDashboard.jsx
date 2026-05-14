@@ -106,18 +106,40 @@ function ProgressLine({ label, value }) {
 
 export default function UserDashboard({ user }) {
   const [dashboard, setDashboard] = useState(null)
+  const [searchQuery, setSearchQuery] = useState('')
   const localProjects = projectsForUser(user)
   const projects = dashboard?.recent_projects?.length
     ? dashboard.recent_projects.map((project) => ({
         id: `backend-${project.id}`,
         title: project.title,
         projectType: project.project_type,
+        environment: project.environment,
+        deploymentType: project.deployment_type,
       }))
     : localProjects
+  const normalizedSearch = searchQuery.trim().toLowerCase()
+  const filteredProjects = normalizedSearch
+    ? projects.filter((project) =>
+        [
+          project.title,
+          project.projectType,
+          project.difficulty,
+          project.environment,
+          project.deploymentType,
+          project.requirement,
+          ...(project.tools || []),
+        ]
+          .filter(Boolean)
+          .join(' ')
+          .toLowerCase()
+          .includes(normalizedSearch),
+      )
+    : projects
   const downloads = dashboard?.downloads ?? localProjects.reduce((sum, project) => sum + (project.downloads?.zip || 0) + (project.downloads?.pdf || 0), 0)
-  const currentProject = projects[0]
-  const recentActivity = projects.length
-    ? projects.slice(0, 5).map((project, index) => [`Generated ${project.projectType} project`, `${index + 3} min ago`, project.id])
+  const currentProject = filteredProjects[0] || projects[0]
+  const activityProjects = normalizedSearch ? filteredProjects : projects
+  const recentActivity = activityProjects.length
+    ? activityProjects.slice(0, 5).map((project, index) => [`Generated ${project.projectType} project`, `${index + 3} min ago`, project.id])
     : [
         ['Generated Helm chart for job-portal', '3 min ago', 'demo-1'],
         ['Pushed code to GitHub', '4 min ago', 'demo-2'],
@@ -178,10 +200,15 @@ export default function UserDashboard({ user }) {
               <h1 className="mt-1 text-2xl font-bold text-white">Project Control Center</h1>
             </div>
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-              <div className="flex h-10 min-w-0 items-center gap-2 rounded-lg border border-slate-800 bg-slate-900/70 px-3 text-sm text-slate-500 sm:w-72">
+              <label className="flex h-10 min-w-0 items-center gap-2 rounded-lg border border-slate-800 bg-slate-900/70 px-3 text-sm text-slate-500 transition focus-within:border-cyan-400/70 focus-within:bg-slate-950 sm:w-72">
                 <Search className="h-4 w-4 shrink-0" />
-                <span className="truncate">Search my projects, logs, files...</span>
-              </div>
+                <input
+                  value={searchQuery}
+                  onChange={(event) => setSearchQuery(event.target.value)}
+                  className="min-w-0 flex-1 bg-transparent text-slate-100 outline-none placeholder:text-slate-500"
+                  placeholder="Search my projects..."
+                />
+              </label>
               <Link to="/generate"><Button size="sm">Create Project</Button></Link>
               <Link to="/app/upload-project"><Button size="sm" variant="secondary" icon={UploadCloud}>Upload Project</Button></Link>
               <Link to="/app/connect-github"><Button size="sm" variant="secondary" icon={GitBranch}>Connect GitHub</Button></Link>
@@ -202,6 +229,44 @@ export default function UserDashboard({ user }) {
               <StatCard icon={AlertTriangle} label="Open Incidents" value="0" detail="No active incidents" tone="amber" />
               <StatCard icon={Download} label="Downloads" value={downloads} detail="ZIP and PDF exports" tone="rose" />
             </div>
+
+            {normalizedSearch ? (
+              <Panel className="p-5">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <h3 className="text-lg font-semibold text-white">Search Results</h3>
+                    <p className="mt-1 text-sm text-slate-400">
+                      {filteredProjects.length ? `${filteredProjects.length} project${filteredProjects.length === 1 ? '' : 's'} matched "${searchQuery}".` : `No projects matched "${searchQuery}".`}
+                    </p>
+                  </div>
+                  <button type="button" onClick={() => setSearchQuery('')} className="text-sm font-medium text-cyan-200 transition hover:text-cyan-100">
+                    Clear search
+                  </button>
+                </div>
+                {filteredProjects.length ? (
+                  <div className="mt-4 grid gap-3 md:grid-cols-2">
+                    {filteredProjects.slice(0, 6).map((project) => {
+                      const backendId = project.id?.startsWith('backend-') ? project.id.replace('backend-', '') : null
+                      return (
+                        <Link
+                          key={project.id}
+                          to={backendId ? `/app/projects/${backendId}/analysis` : `/result/${project.id}`}
+                          className="rounded-lg border border-slate-800 bg-slate-900/60 p-4 transition hover:border-cyan-400/50 hover:bg-slate-900"
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <p className="truncate font-semibold text-white">{project.title}</p>
+                              <p className="mt-1 text-sm text-slate-400">{project.projectType || 'Project'}</p>
+                            </div>
+                            <ChevronRight className="h-4 w-4 shrink-0 text-cyan-300" />
+                          </div>
+                        </Link>
+                      )
+                    })}
+                  </div>
+                ) : null}
+              </Panel>
+            ) : null}
 
             <div className="grid gap-6 xl:grid-cols-[1fr_380px]">
               <Panel className="p-5">
