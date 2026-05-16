@@ -1,5 +1,5 @@
 import { GitBranch, KeyRound, Save } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useLocation } from 'react-router-dom'
 import { Button } from '../components/ui/Button'
 import { Card, CardHeader, CardContent } from '../components/ui/Card'
@@ -18,6 +18,12 @@ export default function Settings() {
   const location = useLocation()
   const [githubStatus, setGithubStatus] = useState(null)
   const [message, setMessage] = useState('')
+  const callbackMessage = useMemo(() => {
+    const params = new URLSearchParams(location.search)
+    if (params.get('github') === 'connected') return 'GitHub connected for your account'
+    if (params.get('github') === 'failed') return 'GitHub connection failed'
+    return ''
+  }, [location.search])
 
   useEffect(() => {
     async function loadStatus() {
@@ -28,10 +34,7 @@ export default function Settings() {
       }
     }
     loadStatus()
-    const params = new URLSearchParams(location.search)
-    if (params.get('github') === 'connected') setMessage('GitHub connected for your account')
-    if (params.get('github') === 'failed') setMessage('GitHub connection failed')
-  }, [location.search])
+  }, [])
 
   async function connectGitHub() {
     setMessage('')
@@ -59,7 +62,7 @@ export default function Settings() {
       <Card>
         <CardHeader title="Workspace Configuration" description="Profile, providers, cluster access, and notification preferences." action={<Button icon={Save}>Save Changes</Button>} />
         <CardContent>
-          {message ? <div className="mb-5 rounded-md border border-cyan-400/30 bg-cyan-400/10 p-3 text-sm text-cyan-100">{message}</div> : null}
+          {message || callbackMessage ? <div className="mb-5 rounded-md border border-cyan-400/30 bg-cyan-400/10 p-3 text-sm text-cyan-100">{message || callbackMessage}</div> : null}
           <div className="mb-6 rounded-lg border border-slate-800 bg-slate-950/60 p-4">
             <div className="flex flex-col gap-4 lg:flex-row lg:items-end">
               <div className="min-w-0 flex-1">

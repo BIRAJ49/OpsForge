@@ -53,11 +53,27 @@ def build_files(project: Project, github_username: str | None = None) -> list[di
     ]
 
 
-def generate_files(db: Session, project: Project, github_username: str | None = None) -> list[GeneratedFile]:
+def build_file_options(project: Project, github_username: str | None = None) -> list[dict[str, str]]:
+    return [
+        {key: file_spec[key] for key in ("file_name", "file_path", "file_type")}
+        for file_spec in build_files(project, github_username)
+    ]
+
+
+def generate_files(db: Session, project: Project, github_username: str | None = None, selected_file_paths: list[str] | None = None) -> list[GeneratedFile]:
+    specs = build_files(project, github_username)
+    if selected_file_paths is not None:
+        selected = set(selected_file_paths)
+        available = {file_spec["file_path"] for file_spec in specs}
+        unsupported = selected - available
+        if unsupported:
+            raise ValueError(f"Unsupported generated file path: {sorted(unsupported)[0]}")
+        specs = [file_spec for file_spec in specs if file_spec["file_path"] in selected]
+
     db.execute(delete(GeneratedFile).where(GeneratedFile.project_id == project.id))
     files = [
         GeneratedFile(project_id=project.id, **file_spec)
-        for file_spec in build_files(project, github_username)
+        for file_spec in specs
     ]
     db.add_all(files)
     db.flush()

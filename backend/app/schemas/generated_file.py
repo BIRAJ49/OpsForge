@@ -14,3 +14,13 @@ class GeneratedFileOut(BaseModel):
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class GenerateFilesRequest(BaseModel):
+    selected_file_paths: list[str] | None = None
+
+
+class GeneratedFileOptionOut(BaseModel):
+    file_name: str
+    file_path: str
+    file_type: str

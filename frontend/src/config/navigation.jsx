@@ -4,8 +4,8 @@ import {
   Boxes,
   ClipboardList,
   CloudCog,
+  FilePlus2,
   FolderSearch,
-  FileCode2,
   GitBranch,
   LayoutDashboard,
   ListTree,
@@ -26,10 +26,11 @@ export const roleRank = {
 export const canAccess = (role, minRole = 'USER') => (roleRank[role] || 0) >= roleRank[minRole]
 
 export const userNavItems = [
+  { name: 'Dashboard', path: '/dashboard', icon: LayoutDashboard, minRole: 'USER' },
+  { name: 'Generate', path: '/generate', icon: FilePlus2, minRole: 'USER' },
   { name: 'Overview', path: '/app/overview', icon: LayoutDashboard, minRole: 'USER' },
   { name: 'Projects', path: '/app/projects', icon: Boxes, minRole: 'USER' },
-  { name: 'Project Analysis', path: '/app/project-analysis', icon: FolderSearch, minRole: 'USER' },
-  { name: 'DevOps Generator', path: '/app/devops-generator', icon: FileCode2, minRole: 'USER' },
+  { name: 'Analyze App', path: '/app/project-analysis', icon: FolderSearch, minRole: 'USER' },
   { name: 'Generated Files', path: '/app/generated-files', icon: ClipboardList, minRole: 'USER' },
   { name: 'Deployments', path: '/app/deployments', icon: Rocket, minRole: 'USER' },
   { name: 'GitOps', path: '/app/gitops', icon: GitBranch, minRole: 'USER' },

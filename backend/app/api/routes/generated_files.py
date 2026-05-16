@@ -12,9 +12,9 @@ from app.core.response import success_response
 from app.models.download import Download
 from app.models.generated_file import GeneratedFile
 from app.models.project import Project
-from app.schemas.generated_file import GeneratedFileOut
+from app.schemas.generated_file import GeneratedFileOptionOut, GeneratedFileOut, GenerateFilesRequest
 from app.services.audit_service import record_audit
-from app.services.generator_service import generate_files
+from app.services.generator_service import build_file_options, generate_files
 from app.services.integration_service import get_user_config_value
 
 router = APIRouter(tags=["generated-files"])
@@ -35,6 +35,34 @@ def _tools_for(project: Project) -> list[str]:
     return list(dict.fromkeys(base))
 
 
+def _features_for(project: Project) -> list[str]:
+    description = (project.description or "").lower()
+
+    def has(*words: str) -> bool:
+        return any(word in description for word in words)
+
+    features = [
+        has("auth", "login", "user") and "User authentication and account-aware project workflows",
+        has("api", "backend", "fastapi", "node", "django") and "Backend API service with environment-based configuration",
+        has("frontend", "react", "dashboard", "ui") and "Frontend application shell ready for deployment",
+        has("postgres", "database", "sql") and "PostgreSQL database configuration with secure placeholders",
+        has("redis", "cache", "queue") and "Redis cache or queue service wiring",
+        has("docker", "container", "compose") and "Containerized local runtime with Docker files",
+        has("kubernetes", "k8s", "helm", "ingress") and "Kubernetes manifests and ingress-ready service routing",
+        has("monitoring", "prometheus", "grafana", "metrics") and "Monitoring-ready configuration and operational checks",
+        has("security", "trivy", "scan", "secrets") and "Security scanning and secret placeholder handling",
+        has("github", "ci", "cd", "pipeline", "workflow") and "GitHub Actions workflow for validation and release automation",
+        has("aws", "terraform", "ec2", "vpc", "iam") and "AWS infrastructure placeholders for Terraform-based provisioning",
+        has("self healing", "self-healing", "auto heal", "auto-heal", "rollback") and "Self-healing hooks, rollback flow, and incident response notes",
+    ]
+    cleaned = [feature for feature in features if feature]
+    return cleaned or [
+        "Application runtime scaffold based on the project description",
+        "Deployment-ready DevOps files with secure placeholder values",
+        "Step-by-step implementation plan from local development to release",
+    ]
+
+
 def _result_for(project: Project, files: list[GeneratedFile]) -> dict:
     title = project.name.replace("-", " ").title()
     return {
@@ -51,6 +79,7 @@ def _result_for(project: Project, files: list[GeneratedFile]) -> dict:
         "difficulty": "Intermediate",
         "requirement": project.description or "Generated from OpsForge project settings.",
         "overview": project.description or f"A production-style DevOps project for {project.name}.",
+        "features": _features_for(project),
         "architecture": "The project separates application runtime, infrastructure manifests, CI/CD automation, GitOps deployment state, and operational documentation.",
         "tools": _tools_for(project),
         "steps": [
@@ -65,10 +94,23 @@ def _result_for(project: Project, files: list[GeneratedFile]) -> dict:
     }
 
 
-@router.post("/projects/{project_id}/generate")
-def generate(project_id: int, request: Request, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+@router.get("/projects/{project_id}/generate/options")
+def generate_options(project_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     project = project_for_user(project_id, db, current_user)
-    files = generate_files(db, project, get_user_config_value(db, "github", current_user, "login"))
+    options = build_file_options(project, get_user_config_value(db, "github", current_user, "login"))
+    return success_response("Generated file options loaded", [GeneratedFileOptionOut(**option).model_dump() for option in options])
+
+
+@router.post("/projects/{project_id}/generate")
+def generate(project_id: int, request: Request, payload: GenerateFilesRequest | None = None, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    project = project_for_user(project_id, db, current_user)
+    selected_file_paths = (payload or GenerateFilesRequest()).selected_file_paths
+    if selected_file_paths is not None and not selected_file_paths:
+        raise HTTPException(status_code=400, detail="Select at least one file to generate")
+    try:
+        files = generate_files(db, project, get_user_config_value(db, "github", current_user, "login"), selected_file_paths)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     ip, ua = request_meta(request)
     record_audit(db, user_id=current_user.id, action="File generation", resource_type="project", resource_id=project.id, ip_address=ip, user_agent=ua)
     db.commit()

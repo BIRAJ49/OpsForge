@@ -1,5 +1,5 @@
 import { GitBranch, ShieldCheck, Unlink } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useLocation } from 'react-router-dom'
 import { Button } from '../components/ui/Button'
 import { Card, CardContent, CardHeader } from '../components/ui/Card'
@@ -11,6 +11,12 @@ export default function ConnectGitHub() {
   const [status, setStatus] = useState(null)
   const [message, setMessage] = useState('')
   const [connecting, setConnecting] = useState(false)
+  const callbackMessage = useMemo(() => {
+    const params = new URLSearchParams(location.search)
+    if (params.get('github') === 'connected') return 'GitHub connected successfully'
+    if (params.get('github') === 'failed') return 'GitHub connection failed'
+    return ''
+  }, [location.search])
 
   useEffect(() => {
     async function loadStatus() {
@@ -21,10 +27,7 @@ export default function ConnectGitHub() {
       }
     }
     loadStatus()
-    const params = new URLSearchParams(location.search)
-    if (params.get('github') === 'connected') setMessage('GitHub connected successfully')
-    if (params.get('github') === 'failed') setMessage('GitHub connection failed')
-  }, [location.search])
+  }, [])
 
   async function connectGitHub() {
     setMessage('')
@@ -57,7 +60,7 @@ export default function ConnectGitHub() {
         <p className="mt-2 text-sm text-slate-400">Authorize OpsForge to create repositories and push generated DevOps files to your GitHub account.</p>
       </div>
 
-      {message ? <div className="rounded-md border border-cyan-400/30 bg-cyan-400/10 p-3 text-sm text-cyan-100">{message}</div> : null}
+      {message || callbackMessage ? <div className="rounded-md border border-cyan-400/30 bg-cyan-400/10 p-3 text-sm text-cyan-100">{message || callbackMessage}</div> : null}
 
       <Card>
         <CardHeader

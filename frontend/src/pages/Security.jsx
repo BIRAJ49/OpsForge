@@ -1,5 +1,5 @@
 import { Play, ShieldCheck, TriangleAlert } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Button } from '../components/ui/Button'
 import { Card, CardHeader, CardContent } from '../components/ui/Card'
 import { StatusBadge } from '../components/ui/StatusBadge'
@@ -14,26 +14,7 @@ export default function Security() {
   const [message, setMessage] = useState('')
   const [scanLoading, setScanLoading] = useState(false)
 
-  useEffect(() => {
-    async function loadSecurityData() {
-      try {
-        const [scanResponse, projectResponse] = await Promise.all([
-          api.get('/security/scans'),
-          api.get('/projects'),
-        ])
-        const scanData = unwrap(scanResponse)
-        const projectData = unwrap(projectResponse)
-        setProjects(projectData)
-        if (projectData.length) setSelectedProjectId((value) => value || String(projectData[0].id))
-        applyScans(scanData, projectData)
-      } catch (error) {
-        setMessage(apiErrorMessage(error, 'Could not load security scans'))
-      }
-    }
-    loadSecurityData()
-  }, [])
-
-  function applyScans(scanData, projectData = projects) {
+  const applyScans = useCallback((scanData, projectData = []) => {
     setScans(scanData)
     if (scanData.length) {
       setIssues(scanData.map((scan) => {
@@ -55,7 +36,26 @@ export default function Security() {
     } else {
       setIssues([])
     }
-  }
+  }, [])
+
+  useEffect(() => {
+    async function loadSecurityData() {
+      try {
+        const [scanResponse, projectResponse] = await Promise.all([
+          api.get('/security/scans'),
+          api.get('/projects'),
+        ])
+        const scanData = unwrap(scanResponse)
+        const projectData = unwrap(projectResponse)
+        setProjects(projectData)
+        if (projectData.length) setSelectedProjectId((value) => value || String(projectData[0].id))
+        applyScans(scanData, projectData)
+      } catch (error) {
+        setMessage(apiErrorMessage(error, 'Could not load security scans'))
+      }
+    }
+    loadSecurityData()
+  }, [applyScans])
 
   async function runScan() {
     if (!selectedProjectId) {
@@ -67,7 +67,7 @@ export default function Security() {
     try {
       const created = unwrap(await api.post(`/security/scan/project/${selectedProjectId}?scan_type=image`))
       const nextScans = [created, ...scans.filter((scan) => scan.id !== created.id)]
-      applyScans(nextScans)
+      applyScans(nextScans, projects)
       setMessage(created.status === 'completed' ? 'Trivy scan completed.' : 'Trivy scan failed. Review the result details below.')
     } catch (error) {
       setMessage(apiErrorMessage(error, 'Could not run Trivy scan'))

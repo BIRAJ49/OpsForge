@@ -15,7 +15,6 @@ import {
   ShieldCheck,
   Users,
 } from 'lucide-react'
-import { Button } from '../../components/ui/Button'
 import { Badge } from '../../components/ui/Badge'
 import { api, apiErrorMessage, unwrap } from '../../services/api'
 

@@ -1,24 +1,3 @@
-export const summaryCards = [
-  { label: 'Total Projects', value: '42', delta: '+6 this month', tone: 'cyan' },
-  { label: 'Healthy Deployments', value: '128', delta: '96.4% success', tone: 'green' },
-  { label: 'Failed Deployments', value: '5', delta: '-2 vs last week', tone: 'rose' },
-  { label: 'Active Alerts', value: '12', delta: '3 critical', tone: 'amber' },
-  { label: 'Security Issues', value: '31', delta: '8 high', tone: 'purple' },
-  { label: 'Average CPU Usage', value: '63%', delta: '+4.2%', tone: 'blue' },
-  { label: 'Average Memory Usage', value: '71%', delta: '+1.8%', tone: 'cyan' },
-  { label: 'Last Deployment Time', value: '18m', delta: 'payments-api', tone: 'slate' },
-]
-
-export const deploymentSuccessData = [
-  { day: 'Mon', success: 94, failed: 6 },
-  { day: 'Tue', success: 97, failed: 3 },
-  { day: 'Wed', success: 91, failed: 9 },
-  { day: 'Thu', success: 96, failed: 4 },
-  { day: 'Fri', success: 98, failed: 2 },
-  { day: 'Sat', success: 93, failed: 7 },
-  { day: 'Sun', success: 99, failed: 1 },
-]
-
 export const resourceUsageData = [
   { time: '00:00', cpu: 42, memory: 58, requests: 320, errors: 1.2, latency: 96, restarts: 0 },
   { time: '04:00', cpu: 48, memory: 61, requests: 380, errors: 1.8, latency: 112, restarts: 1 },
@@ -26,21 +5,6 @@ export const resourceUsageData = [
   { time: '12:00', cpu: 72, memory: 76, requests: 820, errors: 3.2, latency: 148, restarts: 1 },
   { time: '16:00', cpu: 61, memory: 72, requests: 740, errors: 2.1, latency: 121, restarts: 0 },
   { time: '20:00', cpu: 55, memory: 67, requests: 560, errors: 1.7, latency: 104, restarts: 1 },
-]
-
-export const incidentTrendData = [
-  { week: 'W1', low: 4, medium: 3, high: 1 },
-  { week: 'W2', low: 3, medium: 4, high: 2 },
-  { week: 'W3', low: 5, medium: 2, high: 1 },
-  { week: 'W4', low: 2, medium: 3, high: 3 },
-  { week: 'W5', low: 4, medium: 1, high: 1 },
-]
-
-export const serviceHealth = [
-  { name: 'api-gateway', value: 98 },
-  { name: 'payments-api', value: 82 },
-  { name: 'worker-queue', value: 91 },
-  { name: 'web-console', value: 99 },
 ]
 
 export const projects = [

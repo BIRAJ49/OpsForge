@@ -30,7 +30,7 @@ import { api, unwrap } from '../../services/api'
 
 const sidebarItems = [
   [Home, 'Home', '/dashboard', true],
-  [Boxes, 'My Projects', '/app/projects'],
+  [Boxes, 'Projects', '/app/projects'],
   [FileCode2, 'Generated Files', '/app/generated-files'],
   [GitBranch, 'GitHub Repo', '/app/connect-github'],
   [Image, 'Container Images', '/app/deployments'],
@@ -224,7 +224,7 @@ export default function UserDashboard({ user }) {
             </div>
 
             <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-              <StatCard icon={FolderGit2} label="My Projects" value={dashboard?.total_projects ?? projects.length} detail="Only your projects" />
+              <StatCard icon={FolderGit2} label="Projects" value={dashboard?.total_projects ?? projects.length} detail="Only your projects" />
               <StatCard icon={Rocket} label="Saved Projects" value={dashboard?.saved_projects ?? projects.length} detail="Available in history" tone="green" />
               <StatCard icon={AlertTriangle} label="Open Incidents" value="0" detail="No active incidents" tone="amber" />
               <StatCard icon={Download} label="Downloads" value={downloads} detail="ZIP and PDF exports" tone="rose" />
@@ -283,7 +283,7 @@ export default function UserDashboard({ user }) {
                   {[
                     ['Open Project Analysis', currentProject?.id?.startsWith('backend-') ? `/app/projects/${currentProject.id.replace('backend-', '')}/analysis` : '/app/project-analysis'],
                     ['Generate DevOps Files', '/generate'],
-                    ['View My Projects', '/my-projects'],
+                    ['View Projects', '/app/projects'],
                     ['Open Latest Result', currentProject ? `/result/${currentProject.id}` : '/generate'],
                     ['Manage Profile', '/profile'],
                   ].map(([label, to]) => (

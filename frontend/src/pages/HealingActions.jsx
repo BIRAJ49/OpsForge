@@ -1,5 +1,5 @@
 import { CheckCircle2, Clock, Play, RefreshCw } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Button } from '../components/ui/Button'
 import { Card, CardContent, CardHeader } from '../components/ui/Card'
 import { StatusBadge } from '../components/ui/StatusBadge'
@@ -29,7 +29,7 @@ export default function HealingActions({ user }) {
   const [message, setMessage] = useState('')
   const [loading, setLoading] = useState(false)
 
-  async function loadActions() {
+  const loadActions = useCallback(async () => {
     setLoading(true)
     setMessage('')
     try {
@@ -39,11 +39,14 @@ export default function HealingActions({ user }) {
     } finally {
       setLoading(false)
     }
-  }
+  }, [])
 
   useEffect(() => {
-    loadActions()
-  }, [])
+    const timer = window.setTimeout(() => {
+      loadActions()
+    }, 0)
+    return () => window.clearTimeout(timer)
+  }, [loadActions])
 
   async function approveAction(action) {
     setMessage('')

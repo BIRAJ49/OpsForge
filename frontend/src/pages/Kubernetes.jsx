@@ -57,9 +57,7 @@ export default function Kubernetes() {
         const data = unwrap(await api.get('/projects'))
         const loadedProjects = data || []
         setProjects(loadedProjects)
-        if (loadedProjects.length && !selectedProjectId) {
-          setSelectedProjectId(String(loadedProjects[0].id))
-        }
+        if (loadedProjects.length) setSelectedProjectId((value) => value || String(loadedProjects[0].id))
       } catch {
         setProjects([])
       }

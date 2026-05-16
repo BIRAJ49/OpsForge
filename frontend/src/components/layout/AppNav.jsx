@@ -22,7 +22,7 @@ export function AppNav({ user, onLogout }) {
       : [
           ['Dashboard', '/dashboard'],
           ['Generate Project', '/generate'],
-          ['My Projects', '/my-projects'],
+          ['Projects', '/app/projects'],
           [profileLabel, '/profile'],
         ]
 

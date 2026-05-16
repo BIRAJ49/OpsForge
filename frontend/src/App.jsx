@@ -13,7 +13,6 @@ const GeneratorPage = lazy(() => import('./pages/saas/GeneratorPage'))
 const ResultPage = lazy(() => import('./pages/saas/ResultPage'))
 const Profile = lazy(() => import('./pages/saas/Profile'))
 const UserDashboard = lazy(() => import('./pages/saas/UserDashboard'))
-const MyProjects = lazy(() => import('./pages/saas/MyProjects'))
 const AdminDashboard = lazy(() => import('./pages/saas/AdminDashboard'))
 const UserManagement = lazy(() => import('./pages/saas/UserManagement'))
 const SaasAdminProjects = lazy(() => import('./pages/saas/AdminProjects'))
@@ -21,7 +20,6 @@ const SystemUsage = lazy(() => import('./pages/saas/SystemUsage'))
 const AdminAuditLogs = lazy(() => import('./pages/admin/AdminAuditLogs'))
 const Overview = lazy(() => import('./pages/Overview'))
 const Projects = lazy(() => import('./pages/Projects'))
-const CreateProject = lazy(() => import('./pages/CreateProject'))
 const GeneratedFiles = lazy(() => import('./pages/GeneratedFiles'))
 const GeneratedFilePreview = lazy(() => import('./pages/GeneratedFilePreview'))
 const Deployments = lazy(() => import('./pages/Deployments'))
@@ -37,7 +35,6 @@ const Infrastructure = lazy(() => import('./pages/Infrastructure'))
 const Settings = lazy(() => import('./pages/Settings'))
 const UploadProject = lazy(() => import('./pages/UploadProject'))
 const ProjectAnalysis = lazy(() => import('./pages/ProjectAnalysis'))
-const DevOpsGenerator = lazy(() => import('./pages/DevOpsGenerator'))
 const ConnectGitHub = lazy(() => import('./pages/ConnectGitHub'))
 
 function LoadingState() {
@@ -119,6 +116,22 @@ function DashboardLayout({ user, children }) {
   )
 }
 
+function UserWorkspace({ user, children }) {
+  return (
+    <ProtectedRoute user={user} userOnly>
+      <DashboardLayout user={user}>{children}</DashboardLayout>
+    </ProtectedRoute>
+  )
+}
+
+function AnyWorkspace({ user, children }) {
+  return (
+    <ProtectedRoute user={user}>
+      <DashboardLayout user={user}>{children}</DashboardLayout>
+    </ProtectedRoute>
+  )
+}
+
 function RouteTransitions({ user, onAuthenticated, onLogout }) {
   const location = useLocation()
 
@@ -138,23 +151,23 @@ function RouteTransitions({ user, onAuthenticated, onLogout }) {
         <Suspense fallback={<LoadingState />}>
           <Routes location={location}>
             <Route path="/" element={<LandingPage user={user} />} />
-            <Route path="/generate" element={user?.role === 'ADMIN' ? <Navigate to="/admin/dashboard" replace /> : <GeneratorPage user={user} />} />
-            <Route path="/result/:id" element={user?.role === 'ADMIN' ? <Navigate to="/admin/generated-projects" replace /> : <ResultPage />} />
+            <Route path="/generate" element={user ? <UserWorkspace user={user}><GeneratorPage user={user} /></UserWorkspace> : <GeneratorPage user={user} />} />
+            <Route path="/result/:id" element={user ? <UserWorkspace user={user}><ResultPage /></UserWorkspace> : <ResultPage />} />
             <Route path="/login" element={<AuthPage key="login" mode="login" onAuthenticated={onAuthenticated} />} />
             <Route path="/signup" element={<AuthPage key="signup" mode="signup" onAuthenticated={onAuthenticated} />} />
             <Route path="/forgot-password" element={<AuthPage key="forgot" mode="forgot" onAuthenticated={onAuthenticated} />} />
             <Route path="/reset-password" element={<AuthPage key="reset" mode="reset" onAuthenticated={onAuthenticated} />} />
 
-            <Route path="/dashboard" element={<ProtectedRoute user={user} userOnly><UserDashboard user={user} /></ProtectedRoute>} />
-            <Route path="/my-projects" element={<ProtectedRoute user={user} userOnly><MyProjects user={user} /></ProtectedRoute>} />
+            <Route path="/dashboard" element={<UserWorkspace user={user}><UserDashboard user={user} /></UserWorkspace>} />
+            <Route path="/my-projects" element={<Navigate to="/app/projects" replace />} />
             <Route path="/app" element={<Navigate to="/app/overview" replace />} />
             <Route path="/app/overview" element={<ProtectedRoute user={user} userOnly><DashboardLayout user={user}><Overview /></DashboardLayout></ProtectedRoute>} />
             <Route path="/app/projects" element={<ProtectedRoute user={user} userOnly><DashboardLayout user={user}><Projects user={user} /></DashboardLayout></ProtectedRoute>} />
-            <Route path="/app/create-project" element={<ProtectedRoute user={user} userOnly><DashboardLayout user={user}><CreateProject /></DashboardLayout></ProtectedRoute>} />
+            <Route path="/app/create-project" element={<Navigate to="/generate" replace />} />
             <Route path="/app/upload-project" element={<ProtectedRoute user={user} userOnly><DashboardLayout user={user}><UploadProject /></DashboardLayout></ProtectedRoute>} />
             <Route path="/app/project-analysis" element={<ProtectedRoute user={user} userOnly><DashboardLayout user={user}><ProjectAnalysis /></DashboardLayout></ProtectedRoute>} />
             <Route path="/app/projects/:projectId/analysis" element={<ProtectedRoute user={user} userOnly><DashboardLayout user={user}><ProjectAnalysis /></DashboardLayout></ProtectedRoute>} />
-            <Route path="/app/devops-generator" element={<ProtectedRoute user={user} userOnly><DashboardLayout user={user}><DevOpsGenerator /></DashboardLayout></ProtectedRoute>} />
+            <Route path="/app/devops-generator" element={<Navigate to="/app/project-analysis" replace />} />
             <Route path="/app/connect-github" element={<ProtectedRoute user={user}><DashboardLayout user={user}><ConnectGitHub /></DashboardLayout></ProtectedRoute>} />
             <Route path="/app/generated-files" element={<ProtectedRoute user={user} userOnly><DashboardLayout user={user}><GeneratedFiles /></DashboardLayout></ProtectedRoute>} />
             <Route path="/app/generated-files/:fileId" element={<ProtectedRoute user={user} userOnly><DashboardLayout user={user}><GeneratedFilePreview /></DashboardLayout></ProtectedRoute>} />
@@ -169,7 +182,7 @@ function RouteTransitions({ user, onAuthenticated, onLogout }) {
             <Route path="/app/security" element={<ProtectedRoute user={user} userOnly><DashboardLayout user={user}><Security /></DashboardLayout></ProtectedRoute>} />
             <Route path="/app/infrastructure" element={<ProtectedRoute user={user} userOnly><DashboardLayout user={user}><Infrastructure /></DashboardLayout></ProtectedRoute>} />
             <Route path="/app/settings" element={<ProtectedRoute user={user} userOnly><DashboardLayout user={user}><Settings /></DashboardLayout></ProtectedRoute>} />
-            <Route path="/profile" element={<ProtectedRoute user={user}><Profile user={user} onLogout={onLogout} /></ProtectedRoute>} />
+            <Route path="/profile" element={<AnyWorkspace user={user}><Profile user={user} onLogout={onLogout} /></AnyWorkspace>} />
 
             <Route path="/admin" element={<Navigate to="/admin/dashboard" replace />} />
             <Route path="/admin/dashboard" element={<ProtectedRoute user={user} admin><AdminDashboard /></ProtectedRoute>} />

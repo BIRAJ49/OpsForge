@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { GitCommitHorizontal, RefreshCw, RotateCw } from 'lucide-react'
 import { Badge } from '../components/ui/Badge'
 import { Button } from '../components/ui/Button'
@@ -17,7 +17,7 @@ export default function GitOps() {
   const [message, setMessage] = useState('')
   const [loading, setLoading] = useState(false)
 
-  async function loadGitOps(selectedProjectId = project?.id) {
+  const loadGitOps = useCallback(async (selectedProjectId) => {
     setLoading(true)
     setMessage('')
     try {
@@ -52,11 +52,14 @@ export default function GitOps() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [])
 
   useEffect(() => {
-    loadGitOps()
-  }, [])
+    const timer = window.setTimeout(() => {
+      loadGitOps()
+    }, 0)
+    return () => window.clearTimeout(timer)
+  }, [loadGitOps])
 
   async function syncApp() {
     if (!project) return
