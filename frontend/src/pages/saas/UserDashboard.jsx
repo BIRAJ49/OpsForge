@@ -194,13 +194,13 @@ export default function UserDashboard({ user }) {
         </aside>
 
         <div>
-          <header className="flex flex-col gap-4 border-b border-slate-800 bg-slate-950/80 p-5 2xl:flex-row 2xl:items-center 2xl:justify-between">
+          <header className="flex flex-col gap-4 border-b border-slate-800 bg-slate-950/80 p-5 xl:flex-row xl:items-center xl:justify-between">
             <div>
               <p className="text-xs font-bold uppercase tracking-[0.35em] text-cyan-300">OpsForge Workspace</p>
               <h1 className="mt-1 text-2xl font-bold text-white sm:whitespace-nowrap">Project Control Center</h1>
             </div>
-            <div className="flex flex-col gap-3 sm:flex-row sm:flex-nowrap sm:items-center 2xl:justify-end">
-              <label className="flex h-10 min-w-0 items-center gap-2 rounded-lg border border-slate-800 bg-slate-900/70 px-3 text-sm text-slate-500 transition focus-within:border-cyan-400/70 focus-within:bg-slate-950 sm:w-56 md:w-64 2xl:w-72">
+            <div className="w-full xl:max-w-sm">
+              <label className="flex h-10 min-w-0 items-center gap-2 rounded-lg border border-slate-800 bg-slate-900/70 px-3 text-sm text-slate-500 transition focus-within:border-cyan-400/70 focus-within:bg-slate-950">
                 <Search className="h-4 w-4 shrink-0" />
                 <input
                   value={searchQuery}
@@ -209,18 +209,20 @@ export default function UserDashboard({ user }) {
                   placeholder="Search my projects..."
                 />
               </label>
-              <Link to="/generate"><Button size="sm">Create Project</Button></Link>
-              <Link to="/app/upload-project"><Button size="sm" variant="secondary" icon={UploadCloud}>Upload Project</Button></Link>
-              <Link to="/app/connect-github"><Button size="sm" variant="secondary" icon={GitBranch}>Connect GitHub</Button></Link>
             </div>
           </header>
 
           <main className="mx-auto max-w-6xl space-y-6 p-5 lg:p-8">
-            <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+            <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
               <p className="max-w-3xl text-sm text-slate-400">
                 A focused dashboard for creating, saving, downloading, and reviewing your own DevOps projects.
               </p>
-              <Badge tone="cyan">User access</Badge>
+              <div className="flex flex-col gap-3 sm:flex-row sm:flex-nowrap sm:items-center xl:justify-end">
+                <Link to="/generate"><Button size="sm">Create Project</Button></Link>
+                <Link to="/app/upload-project"><Button size="sm" variant="secondary" icon={UploadCloud}>Upload Project</Button></Link>
+                <Link to="/app/connect-github"><Button size="sm" variant="secondary" icon={GitBranch}>Connect GitHub</Button></Link>
+                <Badge tone="cyan">User access</Badge>
+              </div>
             </div>
 
             <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
