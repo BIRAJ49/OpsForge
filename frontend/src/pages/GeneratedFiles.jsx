@@ -247,30 +247,31 @@ export default function GeneratedFiles() {
         {message ? <StatusMessage tone={messageTone} message={message} onClose={() => setMessage('')} /> : null}
         {loading ? <div className="py-8 text-center text-sm text-slate-400">Loading projects...</div> : null}
         {!loading && !showFiles ? (
-          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+          <div className="space-y-3">
             {projects.map((project) => (
               <button
                 key={project.id}
                 type="button"
                 onClick={() => loadFilesForProject(project.id)}
-                className="min-w-0 rounded-lg border border-slate-800 bg-slate-950/50 p-4 text-left transition hover:border-cyan-400/50 hover:bg-slate-900/70"
+                className="grid w-full min-w-0 gap-4 rounded-lg border border-slate-800 bg-slate-950/50 p-4 text-left transition hover:border-cyan-400/50 hover:bg-slate-900/70 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center"
               >
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="truncate text-base font-semibold text-slate-100">{project.name}</p>
-                    <p className="mt-2 line-clamp-2 text-sm leading-6 text-slate-400">{project.stack || project.description || 'No stack details recorded'}</p>
+                <div className="min-w-0">
+                  <p className="truncate text-base font-semibold text-slate-100">{project.name}</p>
+                  <p className="mt-2 line-clamp-2 text-sm leading-6 text-slate-400">{project.stack || project.description || 'No stack details recorded'}</p>
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <Badge tone="cyan">{project.deployment_type || 'project'}</Badge>
+                    <Badge tone="slate">{project.environment || 'env'}</Badge>
+                    {project.github_repo_url ? <Badge tone="purple">GitHub</Badge> : null}
                   </div>
-                  <FileCode2 className="h-5 w-5 shrink-0 text-cyan-300" />
                 </div>
-                <div className="mt-4 flex flex-wrap gap-2">
-                  <Badge tone="cyan">{project.deployment_type || 'project'}</Badge>
-                  <Badge tone="slate">{project.environment || 'env'}</Badge>
-                  {project.github_repo_url ? <Badge tone="purple">GitHub</Badge> : null}
+                <div className="flex items-center gap-2 text-sm font-medium text-cyan-200 sm:justify-end">
+                  <FileCode2 className="h-5 w-5 shrink-0 text-cyan-300" />
+                  Open files
                 </div>
               </button>
             ))}
             {!projects.length ? (
-              <div className="rounded-lg border border-dashed border-slate-700 p-8 text-center text-sm text-slate-400 sm:col-span-2 xl:col-span-3">
+              <div className="rounded-lg border border-dashed border-slate-700 p-8 text-center text-sm text-slate-400">
                 Create or upload a project first.
               </div>
             ) : null}
