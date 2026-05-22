@@ -60,6 +60,10 @@ jobs:
     runs-on: ubuntu-latest
     needs: test
     if: github.event_name != 'pull_request'
+    outputs:
+      backend_image: ${{ steps.images.outputs.backend }}
+      frontend_image: ${{ steps.images.outputs.frontend }}
+      short_sha: ${{ steps.images.outputs.short_sha }}
 
     steps:
       - name: Checkout repository
@@ -138,11 +142,24 @@ jobs:
           scp -i ~/.ssh/opsforge_ec2 deploy/k8s/opsforge/configmap.yaml "ubuntu@${EC2_HOST_VALUE}:/tmp/opsforge-configmap.yaml"
 
       - name: Restart OpsForge deployments
+        env:
+          BACKEND_IMAGE_REF: ${{ needs.build-and-push.outputs.backend_image }}:${{ needs.build-and-push.outputs.short_sha }}
+          FRONTEND_IMAGE_REF: ${{ needs.build-and-push.outputs.frontend_image }}:${{ needs.build-and-push.outputs.short_sha }}
         run: |
           EC2_HOST_VALUE="$(cat ~/.ssh/opsforge_host)"
-          ssh -i ~/.ssh/opsforge_ec2 "ubuntu@${EC2_HOST_VALUE}" <<'EOF'
+          ssh -i ~/.ssh/opsforge_ec2 "ubuntu@${EC2_HOST_VALUE}" <<EOF
             set -euo pipefail
             sudo kubectl apply -f /tmp/opsforge-configmap.yaml
+            sudo kubectl patch deployment/opsforge-backend \
+              -n opsforge-system \
+              --type='json' \
+              -p='[{"op":"replace","path":"/spec/template/spec/initContainers/0/image","value":"'"$BACKEND_IMAGE_REF"'"}]'
+            sudo kubectl set image deployment/opsforge-backend \
+              backend="$BACKEND_IMAGE_REF" \
+              -n opsforge-system
+            sudo kubectl set image deployment/opsforge-frontend \
+              frontend="$FRONTEND_IMAGE_REF" \
+              -n opsforge-system
             sudo kubectl rollout restart deployment/opsforge-backend -n opsforge-system
             sudo kubectl rollout restart deployment/opsforge-frontend -n opsforge-system
             sudo kubectl rollout status deployment/opsforge-backend -n opsforge-system --timeout=180s
