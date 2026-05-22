@@ -47,7 +47,7 @@ export function Button({
 
   return (
     <button
-      className={`inline-flex items-center justify-center gap-2 rounded-md border font-medium transition disabled:cursor-not-allowed disabled:opacity-50 ${variants[variant]} ${sizes[size]} ${className}`}
+      className={`inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md border font-medium transition disabled:cursor-not-allowed disabled:opacity-50 ${variants[variant]} ${sizes[size]} ${className}`}
       disabled={isDisabled}
       onClick={handleClick}
       type={props.type || (onClick ? 'button' : 'submit')}
@@ -56,7 +56,7 @@ export function Button({
       {isLoading ? (
         <span className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
       ) : Icon ? (
-        <Icon className="h-4 w-4" />
+        <Icon className="h-4 w-4 shrink-0" />
       ) : null}
       {children}
     </button>
