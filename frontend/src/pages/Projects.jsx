@@ -168,7 +168,7 @@ export default function Projects({ user, onLoginClick }) {
       />
       <CardContent>
         {message ? <div className="mb-4 rounded-md border border-cyan-400/30 bg-cyan-400/10 p-3 text-sm text-cyan-100">{message}</div> : null}
-        {loading ? <div className="py-8 text-center text-sm text-slate-400">Loading projects...</div> : <Table columns={columns} data={rows} tableClassName="xl:table-fixed" />}
+        {loading ? <div className="py-8 text-center text-sm text-slate-400">Loading projects...</div> : <Table columns={columns} data={rows} />}
       </CardContent>
     </Card>
   )

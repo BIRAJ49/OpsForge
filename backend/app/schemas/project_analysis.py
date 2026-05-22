@@ -25,6 +25,7 @@ class AnalyzeGithubRequest(BaseModel):
 
 
 class GenerateFromAnalysisRequest(BaseModel):
+    selected_file_paths: list[str] | None = None
     generate_docker: bool = True
     generate_compose: bool = True
     generate_kubernetes: bool = True

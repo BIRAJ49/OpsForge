@@ -112,7 +112,8 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_production_secrets(self):
-        if self.APP_ENV.lower() == "production":
+        strict_secret_envs = {"production", "staging"}
+        if self.APP_ENV.lower() in strict_secret_envs:
             weak_values = {
                 "JWT_SECRET_KEY": self.JWT_SECRET_KEY,
                 "ADMIN_PASSWORD": self.ADMIN_PASSWORD,

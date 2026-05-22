@@ -9,10 +9,10 @@ export function Sidebar({ role }) {
   const allItems = isAdminMode ? adminNavItems : userNavItems
   const navItems = allItems.filter((item) => canAccess(role, item.minRole))
   const subtitle = isAdminMode ? 'Admin Dashboard' : 'User Dashboard'
-  const footerText = isAdminMode ? 'Platform governance' : 'Self-healing enabled'
+  const footerText = isAdminMode ? 'Admin controls' : 'Healing actions'
   const footerDetail = isAdminMode
     ? 'Audit, policy, and cluster controls'
-    : '4 automated actions in the last 24h'
+    : '4 actions requested in the last 24h'
 
   return (
     <>

@@ -5,18 +5,6 @@ import { Button } from '../components/ui/Button'
 import { Card, CardContent, CardHeader } from '../components/ui/Card'
 import { apiErrorMessage, projectAnalyzerApi, unwrap } from '../services/api'
 
-const toggles = [
-  ['generate_docker', 'Generate Docker files'],
-  ['generate_kubernetes', 'Generate Kubernetes files'],
-  ['generate_helm', 'Generate Helm chart'],
-  ['generate_github_actions', 'Generate GitHub Actions workflow'],
-  ['generate_argocd', 'Generate Argo CD files'],
-  ['generate_terraform', 'Generate Terraform files'],
-  ['generate_readme', 'Generate README'],
-  ['run_security_check', 'Run security check'],
-  ['create_deployment_plan', 'Create deployment plan'],
-]
-
 export default function UploadProject() {
   const navigate = useNavigate()
   const [uploadType, setUploadType] = useState('zip')
@@ -71,7 +59,7 @@ export default function UploadProject() {
         <h1 className="mt-1 text-2xl font-bold text-white">Upload Project</h1>
       </div>
       <Card>
-        <CardHeader title="Source and generation options" description="Upload a ZIP or analyze a GitHub repository without executing project code." />
+        <CardHeader title="Project source" description="Upload a ZIP or analyze a GitHub repository without executing project code. File generation options appear after analysis." />
         <CardContent>
           <form className="grid gap-5 lg:grid-cols-2" onSubmit={submit}>
             <label className="space-y-2">
@@ -121,14 +109,6 @@ export default function UploadProject() {
                 <label key={name} className="flex items-center gap-3 rounded-lg border border-slate-800 bg-slate-950/60 p-4 text-sm text-slate-200">
                   <input name={name} type="checkbox" defaultChecked={index < 3} className="h-4 w-4 accent-cyan-400" />
                   {['Enable monitoring', 'Enable security scan', 'Enable GitOps', 'Enable auto-healing config'][index]}
-                </label>
-              ))}
-            </div>
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 lg:col-span-2">
-              {toggles.map(([name, label]) => (
-                <label key={name} className="flex items-center gap-3 rounded-lg border border-slate-800 bg-slate-950/60 p-3 text-sm text-slate-300">
-                  <input name={name} type="checkbox" defaultChecked className="h-4 w-4 accent-cyan-400" />
-                  {label}
                 </label>
               ))}
             </div>

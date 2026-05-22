@@ -1,4 +1,4 @@
-import { AlertTriangle, CheckCircle2, Copy, Download, Eye, FileCode2, GitBranch, Info, RefreshCw, Rocket, X } from 'lucide-react'
+import { AlertTriangle, ArrowLeft, CheckCircle2, Copy, Download, Eye, FileCode2, GitBranch, Info, RefreshCw, X } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Badge } from '../components/ui/Badge'
@@ -63,10 +63,8 @@ export default function GeneratedFiles() {
   const [messageTone, setMessageTone] = useState('info')
   const [loading, setLoading] = useState(true)
   const [filesLoading, setFilesLoading] = useState(false)
-  const [optionsLoading, setOptionsLoading] = useState(false)
-  const [fileOptions, setFileOptions] = useState([])
-  const [selectedFilePaths, setSelectedFilePaths] = useState([])
   const [projectId, setProjectId] = useState(null)
+  const [showFiles, setShowFiles] = useState(false)
   const [copiedFileId, setCopiedFileId] = useState(null)
 
   const showMessage = useCallback((text, tone = 'info') => {
@@ -94,32 +92,23 @@ export default function GeneratedFiles() {
 
     const normalizedProjectId = String(nextProjectId)
     setFilesLoading(true)
-    setOptionsLoading(true)
     setProjectId(normalizedProjectId)
+    setShowFiles(true)
     setFiles([])
-    setFileOptions([])
-    setSelectedFilePaths([])
     localStorage.setItem('opsforge_last_project_id', normalizedProjectId)
     if (!options.keepMessage) setMessage('')
 
     try {
-      const [generatedResponse, optionsResponse] = await Promise.all([
-        api.get(`/projects/${normalizedProjectId}/generated-files`),
-        api.get(`/projects/${normalizedProjectId}/generate/options`),
-      ])
+      const generatedResponse = await api.get(`/projects/${normalizedProjectId}/generated-files`)
       const generatedFiles = unwrap(generatedResponse)
-      const availableOptions = unwrap(optionsResponse)
       setFiles(await loadFileContents(generatedFiles))
-      setFileOptions(availableOptions)
-      setSelectedFilePaths(availableOptions.map((option) => option.file_path))
       if (!generatedFiles.length) {
-        showMessage('No generated files for this project yet.', 'info')
+        showMessage('No generated files for this project yet. Open the analysis page and choose files to generate.', 'info')
       }
     } catch (error) {
       showMessage(apiErrorMessage(error, 'Could not load generated files'), 'error')
     } finally {
       setFilesLoading(false)
-      setOptionsLoading(false)
     }
   }, [loadFileContents, showMessage])
 
@@ -130,16 +119,18 @@ export default function GeneratedFiles() {
         const data = unwrap(await api.get('/projects'))
         setProjects(data)
 
-        const lastProjectId = localStorage.getItem('opsforge_last_project_id')
-        const initialProject = data.find((project) => String(project.id) === String(lastProjectId)) || data[0]
-        if (!initialProject) {
+        if (!data.length) {
           setFiles([])
           setProjectId(null)
+          setShowFiles(false)
           showMessage('Create a project first, then generate DevOps files.', 'info')
           return
         }
 
-        await loadFilesForProject(initialProject.id)
+        setFiles([])
+        setProjectId(null)
+        setShowFiles(false)
+        setMessage('')
       } catch (error) {
         showMessage(apiErrorMessage(error, 'Could not load projects'), 'error')
       } finally {
@@ -169,39 +160,6 @@ export default function GeneratedFiles() {
     } catch (error) {
       showMessage(apiErrorMessage(error, 'Could not regenerate file'), 'error')
     }
-  }
-
-  async function generateProjectFiles() {
-    if (!projectId) return
-    if (!selectedFilePaths.length) {
-      showMessage('Select at least one file to generate.', 'error')
-      return
-    }
-    try {
-      const data = unwrap(await api.post(`/projects/${projectId}/generate`, { selected_file_paths: selectedFilePaths }))
-      setFiles(await loadFileContents(data))
-      showMessage(`Generated ${data.length} selected file${data.length === 1 ? '' : 's'} for the selected project.`, 'success')
-    } catch (error) {
-      showMessage(apiErrorMessage(error, 'Could not generate project files'), 'error')
-    }
-  }
-
-  function toggleFilePath(filePath) {
-    setSelectedFilePaths((current) => (
-      current.includes(filePath)
-        ? current.filter((path) => path !== filePath)
-        : [...current, filePath]
-    ))
-  }
-
-  function selectFileType(fileType) {
-    const paths = fileOptions.filter((option) => option.file_type === fileType).map((option) => option.file_path)
-    setSelectedFilePaths((current) => Array.from(new Set([...current, ...paths])))
-  }
-
-  function clearFileType(fileType) {
-    const paths = new Set(fileOptions.filter((option) => option.file_type === fileType).map((option) => option.file_path))
-    setSelectedFilePaths((current) => current.filter((path) => !paths.has(path)))
   }
 
   async function pushToGitHub() {
@@ -271,14 +229,7 @@ export default function GeneratedFiles() {
   }
 
   const selectedProject = projects.find((project) => String(project.id) === String(projectId))
-  const groupedFileOptions = fileOptions.reduce((groups, option) => {
-    const key = option.file_type || 'other'
-    if (!groups[key]) groups[key] = []
-    groups[key].push(option)
-    return groups
-  }, {})
-  const selectedCount = selectedFilePaths.length
-  const generatedPaths = new Set(files.map((file) => file.file_path))
+  const otherProjects = projects.filter((project) => String(project.id) !== String(projectId))
   const groupedGeneratedFiles = files.reduce((groups, file) => {
     const key = file.file_type || 'other'
     if (!groups[key]) groups[key] = []
@@ -289,168 +240,75 @@ export default function GeneratedFiles() {
   return (
     <Card>
       <CardHeader
-        title="Generated Files"
-        description="Choose a project, select files, then generate only what should belong to that project."
-        action={(
-          <div className="flex flex-wrap gap-2">
-            <Button variant="secondary" icon={Download} onClick={downloadAllFiles} disabled={!projectId || !files.length}>Download ZIP</Button>
-            <Button variant="secondary" icon={GitBranch} onClick={pushToGitHub} disabled={!projectId}>Push to GitHub</Button>
-          </div>
-        )}
+        title={showFiles ? selectedProject?.name || 'Generated Files' : 'Generated Files'}
+        description={showFiles ? 'Review, preview, download, regenerate, or push files for this project.' : 'Choose a project to open its generated files.'}
       />
       <CardContent>
         {message ? <StatusMessage tone={messageTone} message={message} onClose={() => setMessage('')} /> : null}
         {loading ? <div className="py-8 text-center text-sm text-slate-400">Loading projects...</div> : null}
-        {!loading ? (
-          <div className="grid gap-5 xl:grid-cols-[280px_minmax(0,1fr)]">
-            <aside className="space-y-4">
-              <div className="rounded-lg border border-slate-800 bg-slate-950/50">
-                <div className="border-b border-slate-800 px-4 py-3">
-                  <p className="text-sm font-semibold text-slate-100">Project</p>
+        {!loading && !showFiles ? (
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            {projects.map((project) => (
+              <button
+                key={project.id}
+                type="button"
+                onClick={() => loadFilesForProject(project.id)}
+                className="min-w-0 rounded-lg border border-slate-800 bg-slate-950/50 p-4 text-left transition hover:border-cyan-400/50 hover:bg-slate-900/70"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="truncate text-base font-semibold text-slate-100">{project.name}</p>
+                    <p className="mt-2 line-clamp-2 text-sm leading-6 text-slate-400">{project.stack || project.description || 'No stack details recorded'}</p>
+                  </div>
+                  <FileCode2 className="h-5 w-5 shrink-0 text-cyan-300" />
                 </div>
-                <div className="space-y-3 p-3">
-                  <select
-                    value={projectId || ''}
-                    onChange={(event) => loadFilesForProject(event.target.value)}
-                    className="h-10 w-full rounded-md border border-slate-700 bg-slate-950 px-3 text-sm text-slate-100 outline-none transition focus:border-cyan-400"
-                    disabled={!projects.length}
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <Badge tone="cyan">{project.deployment_type || 'project'}</Badge>
+                  <Badge tone="slate">{project.environment || 'env'}</Badge>
+                  {project.github_repo_url ? <Badge tone="purple">GitHub</Badge> : null}
+                </div>
+              </button>
+            ))}
+            {!projects.length ? (
+              <div className="rounded-lg border border-dashed border-slate-700 p-8 text-center text-sm text-slate-400 sm:col-span-2 xl:col-span-3">
+                Create or upload a project first.
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+        {!loading && showFiles ? (
+          <div className="space-y-5">
+            <div className="rounded-lg border border-slate-800 bg-slate-950/50">
+              <div className="grid gap-4 p-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
+                <div className="min-w-0">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowFiles(false)
+                      setProjectId(null)
+                      setFiles([])
+                      setMessage('')
+                    }}
+                    className="mb-3 inline-flex items-center gap-2 text-sm font-medium text-cyan-200 transition hover:text-white"
                   >
-                    {projects.map((project) => (
-                      <option key={project.id} value={project.id}>{project.name}</option>
-                    ))}
-                  </select>
-                  {selectedProject ? (
-                    <div className="rounded-md border border-slate-800 bg-slate-900/60 p-3">
-                      <p className="truncate text-sm font-semibold text-slate-100">{selectedProject.name}</p>
-                      <div className="mt-3 flex flex-wrap gap-2">
-                        <Badge tone="cyan">{selectedProject.deployment_type || 'project'}</Badge>
-                        <Badge tone="slate">{selectedProject.environment || 'env'}</Badge>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="rounded-md border border-dashed border-slate-700 p-4 text-sm text-slate-400">
-                      No projects yet.
-                    </div>
-                  )}
+                    <ArrowLeft className="h-4 w-4" />
+                    Projects
+                  </button>
+                  <p className="text-xs uppercase tracking-wide text-slate-500">Selected project</p>
+                  <h2 className="mt-1 truncate text-lg font-semibold text-slate-100">{selectedProject?.name || 'Project'}</h2>
+                  <p className="mt-1 text-sm text-slate-400">{files.length} generated file{files.length === 1 ? '' : 's'} loaded for this project.</p>
+                </div>
+                <div className="flex flex-wrap gap-2 md:justify-end">
+                  <Link to={`/app/projects/${projectId}/analysis`}>
+                    <Button variant="secondary" icon={FileCode2}>Open Analysis</Button>
+                  </Link>
+                  <Button variant="secondary" icon={Download} onClick={downloadAllFiles} disabled={!files.length}>Download ZIP</Button>
+                  <Button variant="secondary" icon={GitBranch} onClick={pushToGitHub}>Push to GitHub</Button>
                 </div>
               </div>
-
-              <div className="rounded-lg border border-slate-800 bg-slate-950/50">
-                <div className="grid grid-cols-2 divide-x divide-slate-800 text-center">
-                  <div className="p-3">
-                    <p className="text-lg font-semibold text-slate-100">{selectedCount}</p>
-                    <p className="mt-1 text-xs text-slate-500">Selected</p>
-                  </div>
-                  <div className="p-3">
-                    <p className="text-lg font-semibold text-slate-100">{files.length}</p>
-                    <p className="mt-1 text-xs text-slate-500">Generated</p>
-                  </div>
-                </div>
-                <div className="border-t border-slate-800 p-3">
-                  <Button className="w-full" icon={Rocket} onClick={generateProjectFiles} disabled={!projectId || !selectedCount}>
-                    Generate Selected
-                  </Button>
-                </div>
-              </div>
-
-              <div className="rounded-lg border border-slate-800 bg-slate-950/50">
-                <div className="border-b border-slate-800 px-4 py-3">
-                  <p className="text-sm font-semibold text-slate-100">Projects</p>
-                </div>
-                <div className="max-h-80 space-y-2 overflow-y-auto p-3">
-                  {projects.map((project) => {
-                    const active = String(project.id) === String(projectId)
-                    return (
-                      <button
-                        key={project.id}
-                        type="button"
-                        onClick={() => loadFilesForProject(project.id)}
-                        className={`w-full rounded-md border px-3 py-2 text-left transition ${
-                          active
-                            ? 'border-cyan-400/60 bg-cyan-400/10'
-                            : 'border-slate-800 bg-slate-900/60 hover:border-cyan-400/40 hover:bg-slate-900'
-                        }`}
-                      >
-                        <span className="block truncate text-sm font-medium text-slate-100">{project.name}</span>
-                        <span className="mt-1 block truncate text-xs text-slate-500">{project.deployment_type || 'project'} / {project.environment || 'env'}</span>
-                      </button>
-                    )
-                  })}
-                  {!projects.length ? (
-                    <div className="rounded-md border border-dashed border-slate-700 p-4 text-sm text-slate-400">
-                      Create a project first.
-                    </div>
-                  ) : null}
-                </div>
-              </div>
-            </aside>
+            </div>
 
             <div className="min-w-0 space-y-5">
-              <div className="rounded-lg border border-slate-800 bg-slate-950/50">
-                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 px-4 py-3">
-                  <div>
-                    <p className="text-sm font-semibold text-slate-100">Files to Generate</p>
-                    <p className="mt-1 text-xs text-slate-400">{selectedCount} of {fileOptions.length} selected</p>
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    <Button size="sm" variant="ghost" onClick={() => setSelectedFilePaths(fileOptions.map((option) => option.file_path))} disabled={!fileOptions.length}>Select All</Button>
-                    <Button size="sm" variant="ghost" onClick={() => setSelectedFilePaths([])} disabled={!fileOptions.length}>Clear</Button>
-                    <Button size="sm" icon={Rocket} onClick={generateProjectFiles} disabled={!projectId || !selectedCount}>Generate</Button>
-                  </div>
-                </div>
-                {optionsLoading ? (
-                  <div className="p-4 text-sm text-slate-400">Loading generation options...</div>
-                ) : (
-                  <div className="grid gap-3 p-4 lg:grid-cols-2 2xl:grid-cols-3">
-                    {Object.entries(groupedFileOptions).map(([fileType, options]) => {
-                      const selectedInGroup = options.filter((option) => selectedFilePaths.includes(option.file_path)).length
-                      return (
-                        <section key={fileType} className="min-w-0 rounded-md border border-slate-800 bg-slate-900/50">
-                          <div className="flex items-center justify-between gap-2 border-b border-slate-800 px-3 py-2">
-                            <div className="min-w-0">
-                              <p className="truncate text-xs font-semibold uppercase text-slate-300">{fileTypeLabel(fileType)}</p>
-                              <p className="mt-0.5 text-xs text-slate-500">{selectedInGroup}/{options.length} selected</p>
-                            </div>
-                            <div className="flex shrink-0 gap-2">
-                              <button type="button" onClick={() => selectFileType(fileType)} className="text-xs font-medium text-cyan-200 hover:text-white">All</button>
-                              <button type="button" onClick={() => clearFileType(fileType)} className="text-xs font-medium text-slate-400 hover:text-white">None</button>
-                            </div>
-                          </div>
-                          <div className="max-h-56 space-y-1 overflow-y-auto p-2">
-                            {options.map((option) => {
-                              const checked = selectedFilePaths.includes(option.file_path)
-                              const generated = generatedPaths.has(option.file_path)
-                              return (
-                                <label key={option.file_path} className={`flex cursor-pointer items-start gap-3 rounded-md border px-3 py-2 text-sm transition ${checked ? 'border-cyan-400/40 bg-cyan-400/10' : 'border-transparent hover:border-slate-700 hover:bg-slate-900'}`}>
-                                  <input
-                                    type="checkbox"
-                                    checked={checked}
-                                    onChange={() => toggleFilePath(option.file_path)}
-                                    className="mt-1 h-4 w-4 rounded border-slate-600 bg-slate-950 text-cyan-400 focus:ring-cyan-400"
-                                  />
-                                  <span className="min-w-0 flex-1">
-                                    <span className="flex min-w-0 items-center gap-2">
-                                      <span className="truncate font-medium text-slate-100">{option.file_name}</span>
-                                      {generated ? <span className="shrink-0 rounded border border-emerald-400/30 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-emerald-200">Ready</span> : null}
-                                    </span>
-                                    <span className="block truncate text-xs text-slate-500">{option.file_path}</span>
-                                  </span>
-                                </label>
-                              )
-                            })}
-                          </div>
-                        </section>
-                      )
-                    })}
-                    {!fileOptions.length ? (
-                      <div className="rounded-md border border-dashed border-slate-700 p-4 text-sm text-slate-400">
-                        No generation options are available for this project.
-                      </div>
-                    ) : null}
-                  </div>
-                )}
-              </div>
-
               <div className="rounded-lg border border-slate-800 bg-slate-950/50">
                 <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 px-4 py-3">
                   <div>
@@ -466,9 +324,11 @@ export default function GeneratedFiles() {
                     <FileCode2 className="mx-auto h-10 w-10 text-cyan-300" />
                     <p className="mt-4 text-sm font-semibold text-slate-100">No generated files for this project</p>
                     <p className="mx-auto mt-2 max-w-md text-sm text-slate-400">
-                      Select files above and generate them for the selected project.
+                      Open the analysis page, choose the files for this project, and generate them there.
                     </p>
-                    <Button className="mt-5" icon={Rocket} onClick={generateProjectFiles} disabled={!selectedCount}>Generate Selected</Button>
+                    <Link to={`/app/projects/${projectId}/analysis`}>
+                      <Button className="mt-5" icon={FileCode2}>Open Analysis</Button>
+                    </Link>
                   </div>
                 ) : null}
 
@@ -523,6 +383,38 @@ export default function GeneratedFiles() {
                 ) : null}
               </div>
             </div>
+
+            {otherProjects.length ? (
+              <div className="rounded-lg border border-slate-800 bg-slate-950/50">
+                <div className="border-b border-slate-800 px-4 py-3">
+                  <p className="text-sm font-semibold text-slate-100">Other Projects</p>
+                  <p className="mt-1 text-xs text-slate-500">Open another project's generated files.</p>
+                </div>
+                <div className="grid gap-3 p-4 sm:grid-cols-2 xl:grid-cols-3">
+                  {otherProjects.map((project) => (
+                    <button
+                      key={project.id}
+                      type="button"
+                      onClick={() => loadFilesForProject(project.id)}
+                      className="min-w-0 rounded-md border border-slate-800 bg-slate-900/60 p-3 text-left transition hover:border-cyan-400/50 hover:bg-slate-900"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-semibold text-slate-100">{project.name}</p>
+                          <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-500">{project.stack || project.description || 'No stack details recorded'}</p>
+                        </div>
+                        <FileCode2 className="h-4 w-4 shrink-0 text-cyan-300" />
+                      </div>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <Badge tone="cyan">{project.deployment_type || 'project'}</Badge>
+                        <Badge tone="slate">{project.environment || 'env'}</Badge>
+                        {project.github_repo_url ? <Badge tone="purple">GitHub</Badge> : null}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : null}
           </div>
         ) : null}
       </CardContent>

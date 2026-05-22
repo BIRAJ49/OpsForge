@@ -14,7 +14,7 @@ export default function AIAssistant() {
   return (
     <div className="grid gap-6 xl:grid-cols-[0.95fr_1.05fr]">
       <Card>
-        <CardHeader title="Incident Context" description="Runtime evidence passed to the AI incident assistant." />
+        <CardHeader title="Incident Context" description="Runtime evidence used for the incident review." />
         <CardContent className="space-y-4">
           {leftPanels.map(([title, body]) => (
             <div key={title} className="rounded-lg border border-slate-800 bg-slate-950/60 p-4">
@@ -26,13 +26,13 @@ export default function AIAssistant() {
         </CardContent>
       </Card>
       <Card>
-        <CardHeader title="AI Analysis Result" description="Root cause and recommended remediation plan." action={<Bot className="h-5 w-5 text-cyan-300" />} />
+        <CardHeader title="Incident Review" description="Likely cause and suggested fix." action={<Bot className="h-5 w-5 text-cyan-300" />} />
         <CardContent className="space-y-4">
           {[
             ['Root cause', 'The v2.4.0 rollout increased synchronous database calls without increasing the connection pool or enabling backpressure. Pods remain alive but fail readiness under load.'],
             ['Suggested fix', 'Rollback to v2.3.9 or increase max pool size while reducing worker concurrency. Add circuit breaking around payment authorization retries.'],
             ['Recommended kubectl command', 'kubectl rollout undo deployment/billing-api -n prod'],
-            ['Prevention advice', 'Add load-test gates before promotion, alert on connection pool waiters, and set HPA on queue depth plus CPU.'],
+            ['Follow-up', 'Add load-test checks before promotion, alert on connection pool waiters, and set HPA on queue depth plus CPU.'],
           ].map(([title, body]) => (
             <div key={title} className="rounded-lg border border-slate-800 bg-slate-950/60 p-4">
               <div className="flex items-center justify-between gap-3">

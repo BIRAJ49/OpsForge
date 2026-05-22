@@ -51,10 +51,11 @@ def execute_action(action: HealingAction, user: User, project: Project | None = 
         raise HTTPException(status_code=403, detail="Production restart/rollback requires ADMIN approval")
     params = action.parameters or {}
     if action.action_type == "restart deployment" and params.get("pod_name"):
-        result = kubernetes_service.restart_pod_owner(params["pod_name"], params.get("namespace"))
+        namespaces = {project.namespace} if project else None
+        result = kubernetes_service.restart_pod_owner(params["pod_name"], params.get("namespace"), namespaces)
         if result.get("status") == "error":
             raise HTTPException(status_code=502, detail=result.get("message") or "Kubernetes restart failed")
-        if result.get("status") in {"not_connected", "not_found", "unsupported"}:
+        if result.get("status") in {"not_connected", "not_found", "unsupported", "forbidden"}:
             raise HTTPException(status_code=400, detail=result.get("message") or "Kubernetes restart could not be completed")
         action.status = "executed"
         action.executed_at = datetime.now(UTC)

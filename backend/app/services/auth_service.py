@@ -90,11 +90,8 @@ def resend_verification(db: Session, email: str) -> None:
 
 def forgot_password(db: Session, email: str) -> None:
     user = db.scalar(select(User).where(User.email == email.lower()))
-    if not user:
-        raise HTTPException(status_code=404, detail="Account does not exist. Create an account first.")
-    if not user.is_active:
-        raise HTTPException(status_code=403, detail="Account is disabled")
-    create_reset_code(db, user)
+    if user and user.is_active:
+        create_reset_code(db, user)
 
 
 def reset_password(db: Session, email: str, code: str, new_password: str) -> User:
@@ -120,7 +117,6 @@ def seed_admin(db: Session) -> None:
     admin = db.scalar(select(User).where(User.email == settings.ADMIN_EMAIL.lower()))
     if admin:
         admin.name = settings.ADMIN_NAME
-        admin.password_hash = hash_password(settings.ADMIN_PASSWORD)
         if admin.role != UserRole.ADMIN:
             admin.role = UserRole.ADMIN
         admin.is_verified = True

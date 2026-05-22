@@ -24,39 +24,39 @@ const TOOLS_BY_TYPE = {
 
 const TEMPLATE_FEATURES = {
   Docker: [
-    'Containerized application runtime with a Dockerfile and compose workflow',
+    'Containerized app runtime with a Dockerfile and compose file',
     'Local development stack with service ports and environment placeholders',
-    'Repeatable build and run steps for validating the app before deployment',
+    'Build and run steps for checking the app before deployment',
   ],
   Kubernetes: [
     'Kubernetes deployment, service, and ingress manifests',
-    'Container image placeholders ready for GitHub Container Registry',
-    'Cluster deployment steps with namespace and runtime configuration guidance',
+    'Container image placeholders for GitHub Container Registry',
+    'Cluster deployment steps with namespace and runtime configuration notes',
   ],
   'CI/CD': [
-    'GitHub Actions workflow for validation and deployment automation',
+    'GitHub Actions workflow for validation and deployment',
     'Build, scan, package, and release stages with secure secret placeholders',
-    'Repository-ready automation for pushing generated artifacts forward',
+    'Steps for pushing generated files from the repository',
   ],
   Terraform: [
     'Terraform infrastructure files with provider and variable placeholders',
-    'Environment-specific provisioning plan for cloud resources',
-    'State and secret handling notes for safe infrastructure changes',
+    'Provisioning plan for cloud resources',
+    'State and secret handling notes',
   ],
   'AWS Deployment': [
     'AWS compute, networking, IAM, and security group placeholders',
-    'Deployment plan for moving an app onto AWS-managed infrastructure',
-    'Operational checklist for credentials, access, rollout, and rollback',
+    'Deployment plan for running an app on AWS',
+    'Checklist for credentials, access, rollout, and rollback',
   ],
   Monitoring: [
-    'Monitoring-ready service plan with metrics, dashboards, and alerting notes',
-    'Prometheus and Grafana-oriented operational workflow',
-    'Incident visibility steps for validating runtime health',
+    'Service plan with metrics, dashboards, and alerting notes',
+    'Prometheus and Grafana setup notes',
+    'Steps for checking runtime health',
   ],
   'Self-Healing DevOps': [
-    'Health checks, rollback flow, and incident response automation notes',
-    'Kubernetes autoscaling and recovery-oriented deployment files',
-    'Controlled self-healing workflow with approval and execution steps',
+    'Health checks, rollback flow, and incident response notes',
+    'Kubernetes autoscaling and recovery deployment files',
+    'Healing workflow with approval and execution steps',
   ],
 }
 
@@ -184,14 +184,14 @@ function inferBlueprint(description, selectedProjectType, selectedDifficulty) {
   const features = [
     has('auth', 'login', 'user') && 'User authentication and account-aware project workflows',
     has('api', 'backend', 'fastapi', 'node', 'django') && 'Backend API service with environment-based configuration',
-    has('frontend', 'react', 'dashboard', 'ui') && 'Frontend application shell ready for deployment',
+    has('frontend', 'react', 'dashboard', 'ui') && 'Frontend app shell and deployment notes',
     has('postgres', 'database', 'sql') && 'PostgreSQL database configuration with secure placeholders',
     has('redis', 'cache', 'queue') && 'Redis cache or queue service wiring',
     has('docker', 'container', 'compose') && 'Containerized local runtime with Docker files',
     has('kubernetes', 'k8s', 'helm', 'ingress') && 'Kubernetes manifests and ingress-ready service routing',
-    has('monitoring', 'prometheus', 'grafana', 'metrics') && 'Monitoring-ready configuration and operational checks',
+    has('monitoring', 'prometheus', 'grafana', 'metrics') && 'Monitoring configuration and operational checks',
     has('security', 'trivy', 'scan', 'secrets') && 'Security scanning and secret placeholder handling',
-    has('github', 'ci', 'cd', 'pipeline', 'workflow') && 'GitHub Actions workflow for validation and release automation',
+    has('github', 'ci', 'cd', 'pipeline', 'workflow') && 'GitHub Actions workflow for validation and release',
     has('aws', 'terraform', 'ec2', 'vpc', 'iam') && 'AWS infrastructure placeholders for Terraform-based provisioning',
     has('self healing', 'self-healing', 'auto heal', 'auto-heal', 'rollback') && 'Self-healing hooks, rollback flow, and incident response notes',
   ].filter(Boolean)
@@ -199,8 +199,8 @@ function inferBlueprint(description, selectedProjectType, selectedDifficulty) {
   if (!features.length) {
     features.push(
       'Application runtime scaffold based on the project description',
-      'Deployment-ready DevOps files with secure placeholder values',
-      'Step-by-step implementation plan from local development to release',
+      'DevOps files with secure placeholder values',
+      'Implementation plan from local development to release',
     )
   }
 
@@ -243,7 +243,7 @@ function templateBlueprint(projectType, difficulty, description) {
 function fileSet(projectType, title, description, features) {
   const slug = slugify(title)
   const base = {
-    'README.md': `# ${title}\n\nGenerated by OpsForge from this project description:\n\n> ${description || 'No description provided.'}\n\n## What this project does\n\n${features.map((feature) => `- ${feature}`).join('\n')}\n\n## Goal\nCreate a production-style ${projectType} project with secure defaults, implementation steps, and deployable DevOps files.\n`,
+    'README.md': `# ${title}\n\nOpsForge created this from the project description:\n\n> ${description || 'No description provided.'}\n\n## What this project does\n\n${features.map((feature) => `- ${feature}`).join('\n')}\n\n## Goal\nCreate a ${projectType} project with secure defaults, implementation steps, and deployable DevOps files.\n`,
     'docs/implementation-plan.md': `# Implementation Plan\n\n${features.map((feature, index) => `${index + 1}. ${feature}`).join('\n')}\n\n## Release Path\n\n1. Review generated files.\n2. Configure secrets and environment values.\n3. Run local validation.\n4. Push to GitHub.\n5. Deploy through the selected runtime target.\n`,
   }
 
@@ -275,8 +275,8 @@ export function generateProject({ projectType, difficulty, requirement, user, ge
   const files = fileSet(blueprint.projectType, title, requirement, blueprint.features)
   const sourceLabel = generationMode === 'template' ? 'used the selected template' : 'analyzed the description'
   const architecture = generationMode === 'template'
-    ? `The architecture follows the ${blueprint.projectType} template. It includes the standard files, tools, implementation sequence, and secure placeholders expected for this template.`
-    : 'The architecture is derived from the requested features. It separates application runtime, configuration, infrastructure manifests, CI/CD automation, and operational documentation so the project can move from local validation to deployment.'
+    ? `The architecture follows the ${blueprint.projectType} template. It includes the expected files, tools, implementation order, and secure placeholders for this template.`
+    : 'The architecture comes from the requested features. It separates runtime, configuration, infrastructure files, CI/CD, and documentation so the project can move from local checks to deployment.'
 
   return {
     id: createLocalId(),
@@ -286,7 +286,7 @@ export function generateProject({ projectType, difficulty, requirement, user, ge
     difficulty: blueprint.difficulty,
     generationMode,
     requirement: requirement || `Generated from the ${blueprint.projectType} template.`,
-    overview: `OpsForge ${sourceLabel} and generated a ${blueprint.difficulty.toLowerCase()} ${blueprint.projectType} workspace with features, implementation steps, secure placeholders, and download-ready files.`,
+    overview: `OpsForge ${sourceLabel} and created a ${blueprint.difficulty.toLowerCase()} ${blueprint.projectType} project with features, steps, secure placeholders, and downloadable files.`,
     architecture,
     features: blueprint.features,
     tools: blueprint.tools.length ? blueprint.tools : TOOLS_BY_TYPE[blueprint.projectType] || ['Docker', 'GitHub Actions'],
@@ -294,9 +294,9 @@ export function generateProject({ projectType, difficulty, requirement, user, ge
       generationMode === 'template'
         ? `Start from the ${blueprint.projectType} template and review the included assumptions.`
         : 'Translate the project description into concrete application features and runtime dependencies.',
-      'Create the repository structure, documentation, and environment placeholders.',
+      'Create the repository structure, docs, and environment placeholders.',
       `Generate application, container, infrastructure, and automation files for ${generationMode === 'template' ? 'the selected template' : 'the inferred target'}.`,
-      'Add validation, security scanning, deployment, and operational review steps.',
+      'Add validation, security scanning, deployment, and review steps.',
       'Run locally, configure secrets, push to GitHub, and deploy through the generated workflow.',
     ],
     folderStructure: ['app/', 'infra/', 'k8s/', '.github/workflows/', 'README.md'],

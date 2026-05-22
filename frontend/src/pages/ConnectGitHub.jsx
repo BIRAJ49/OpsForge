@@ -89,7 +89,7 @@ export default function ConnectGitHub() {
               <div className="rounded-md border border-slate-800 bg-slate-950/60 p-4 text-sm text-slate-300">
                 <div className="flex gap-3">
                   <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-emerald-300" />
-                  <p>GitHub will ask for repository, workflow, and package permissions so OpsForge can create repos and commit generated lifecycle files.</p>
+                  <p>GitHub will ask for repository, workflow, and package permissions so OpsForge can create repos and commit generated files.</p>
                 </div>
               </div>
             </div>

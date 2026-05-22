@@ -43,7 +43,7 @@ export default function Incidents() {
     <div className="space-y-4">
       <div>
         <h1 className="text-2xl font-bold text-white">Incidents</h1>
-        <p className="mt-1 text-sm text-slate-400">AI-assisted incident response, rollback, and resolution workflows.</p>
+        <p className="mt-1 text-sm text-slate-400">Review incidents, request rollbacks, and track resolution work.</p>
       </div>
       {message ? <div className="rounded-md border border-cyan-400/30 bg-cyan-400/10 p-3 text-sm text-cyan-100">{message}</div> : null}
       <div className="grid gap-4 xl:grid-cols-3">

@@ -102,11 +102,19 @@ class KubernetesService:
     def _pod_container_count(self, pod) -> int:
         return len(pod.spec.containers or [])
 
-    def namespaces(self) -> dict:
+    def _filter_namespace_items(self, items: list, namespaces: set[str] | None) -> list:
+        if namespaces is None:
+            return items
+        return [item for item in items if item.metadata.namespace in namespaces]
+
+    def _namespace_visible(self, namespace: str | None, namespaces: set[str] | None) -> bool:
+        return namespaces is None or bool(namespace and namespace in namespaces)
+
+    def namespaces(self, namespaces: set[str] | None = None) -> dict:
         if not self._load_config():
             return self._not_connected("namespaces")
         try:
-            namespaces = self.core.list_namespace().items
+            namespace_items = self.core.list_namespace().items
             return {
                 "status": "live",
                 "items": [
@@ -115,13 +123,14 @@ class KubernetesService:
                         "status": ns.status.phase,
                         "age": self._age(ns.metadata.creation_timestamp),
                     }
-                    for ns in namespaces
+                    for ns in namespace_items
+                    if namespaces is None or ns.metadata.name in namespaces
                 ],
             }
         except Exception as exc:
             return self._error("namespaces", exc)
 
-    def list_resource(self, resource: str) -> dict:
+    def list_resource(self, resource: str, namespaces: set[str] | None = None) -> dict:
         if not self._load_config():
             return self._not_connected(resource)
         try:
@@ -137,12 +146,12 @@ class KubernetesService:
             handler = handlers.get(resource)
             if not handler:
                 return {"status": "unsupported", "resource": resource, "items": []}
-            return {"status": "live", "resource": resource, "items": handler()}
+            return {"status": "live", "resource": resource, "items": handler(namespaces)}
         except Exception as exc:
             return self._error(resource, exc)
 
-    def _pods(self) -> list[dict[str, Any]]:
-        pods = self.core.list_pod_for_all_namespaces().items
+    def _pods(self, namespaces: set[str] | None = None) -> list[dict[str, Any]]:
+        pods = self._filter_namespace_items(self.core.list_pod_for_all_namespaces().items, namespaces)
         return [
             {
                 "name": pod.metadata.name,
@@ -161,8 +170,8 @@ class KubernetesService:
             for pod in pods
         ]
 
-    def _deployments(self) -> list[dict[str, Any]]:
-        deployments = self.apps.list_deployment_for_all_namespaces().items
+    def _deployments(self, namespaces: set[str] | None = None) -> list[dict[str, Any]]:
+        deployments = self._filter_namespace_items(self.apps.list_deployment_for_all_namespaces().items, namespaces)
         return [
             {
                 "name": item.metadata.name,
@@ -176,8 +185,8 @@ class KubernetesService:
             for item in deployments
         ]
 
-    def _services(self) -> list[dict[str, Any]]:
-        services = self.core.list_service_for_all_namespaces().items
+    def _services(self, namespaces: set[str] | None = None) -> list[dict[str, Any]]:
+        services = self._filter_namespace_items(self.core.list_service_for_all_namespaces().items, namespaces)
         return [
             {
                 "name": item.metadata.name,
@@ -190,8 +199,8 @@ class KubernetesService:
             for item in services
         ]
 
-    def _ingress(self) -> list[dict[str, Any]]:
-        ingresses = self.networking.list_ingress_for_all_namespaces().items
+    def _ingress(self, namespaces: set[str] | None = None) -> list[dict[str, Any]]:
+        ingresses = self._filter_namespace_items(self.networking.list_ingress_for_all_namespaces().items, namespaces)
         return [
             {
                 "name": item.metadata.name,
@@ -208,8 +217,8 @@ class KubernetesService:
             for item in ingresses
         ]
 
-    def _configmaps(self) -> list[dict[str, Any]]:
-        configmaps = self.core.list_config_map_for_all_namespaces().items
+    def _configmaps(self, namespaces: set[str] | None = None) -> list[dict[str, Any]]:
+        configmaps = self._filter_namespace_items(self.core.list_config_map_for_all_namespaces().items, namespaces)
         return [
             {
                 "name": item.metadata.name,
@@ -220,8 +229,8 @@ class KubernetesService:
             for item in configmaps
         ]
 
-    def _secrets(self) -> list[dict[str, Any]]:
-        secrets = self.core.list_secret_for_all_namespaces().items
+    def _secrets(self, namespaces: set[str] | None = None) -> list[dict[str, Any]]:
+        secrets = self._filter_namespace_items(self.core.list_secret_for_all_namespaces().items, namespaces)
         return [
             {
                 "name": item.metadata.name,
@@ -234,8 +243,8 @@ class KubernetesService:
             for item in secrets
         ]
 
-    def _hpa(self) -> list[dict[str, Any]]:
-        hpas = self.autoscaling.list_horizontal_pod_autoscaler_for_all_namespaces().items
+    def _hpa(self, namespaces: set[str] | None = None) -> list[dict[str, Any]]:
+        hpas = self._filter_namespace_items(self.autoscaling.list_horizontal_pod_autoscaler_for_all_namespaces().items, namespaces)
         return [
             {
                 "name": item.metadata.name,
@@ -250,8 +259,9 @@ class KubernetesService:
             for item in hpas
         ]
 
-    def _find_pod_namespace(self, pod_name: str) -> str | None:
+    def _find_pod_namespace(self, pod_name: str, namespaces: set[str] | None = None) -> str | None:
         pods = self.core.list_pod_for_all_namespaces(field_selector=f"metadata.name={pod_name}").items
+        pods = self._filter_namespace_items(pods, namespaces)
         return pods[0].metadata.namespace if pods else None
 
     def _owner_reference(self, item, kind: str):
@@ -325,11 +335,13 @@ class KubernetesService:
         serialized["metadata"] = metadata
         return sanitize_ai_text(yaml.safe_dump(serialized, sort_keys=False))[:7000]
 
-    def detailed_pod_ai_fix(self, pod_name: str, namespace: str | None = None) -> dict:
+    def detailed_pod_ai_fix(self, pod_name: str, namespace: str | None = None, namespaces: set[str] | None = None) -> dict:
         if not self._load_config():
             return self._not_connected("pod_ai_fix")
         try:
-            target_namespace = namespace or self._find_pod_namespace(pod_name)
+            if namespace and not self._namespace_visible(namespace, namespaces):
+                return {"status": "forbidden", "pod_name": pod_name, "message": "Namespace is not available for this user"}
+            target_namespace = namespace or self._find_pod_namespace(pod_name, namespaces)
             if not target_namespace:
                 return {"status": "not_found", "pod_name": pod_name, "message": f"Pod {pod_name} was not found"}
 
@@ -438,11 +450,11 @@ class KubernetesService:
         except Exception as exc:
             return {"status": "error", "pod_name": pod_name, "namespace": namespace, "message": str(exc)}
 
-    def pod_logs(self, pod_name: str) -> dict:
+    def pod_logs(self, pod_name: str, namespaces: set[str] | None = None) -> dict:
         if not self._load_config():
             return self._not_connected("pod_logs")
         try:
-            namespace = self._find_pod_namespace(pod_name)
+            namespace = self._find_pod_namespace(pod_name, namespaces)
             if not namespace:
                 return {"status": "not_found", "pod_name": pod_name, "logs": []}
             logs = self.core.read_namespaced_pod_log(name=pod_name, namespace=namespace, tail_lines=200)
@@ -452,11 +464,11 @@ class KubernetesService:
         except Exception as exc:
             return {"status": "error", "pod_name": pod_name, "message": str(exc), "logs": []}
 
-    def pod_events(self, pod_name: str) -> dict:
+    def pod_events(self, pod_name: str, namespaces: set[str] | None = None) -> dict:
         if not self._load_config():
             return self._not_connected("pod_events")
         try:
-            namespace = self._find_pod_namespace(pod_name)
+            namespace = self._find_pod_namespace(pod_name, namespaces)
             if not namespace:
                 return {"status": "not_found", "pod_name": pod_name, "events": []}
             events = self.core.list_namespaced_event(namespace=namespace, field_selector=f"involvedObject.name={pod_name}").items
@@ -479,11 +491,11 @@ class KubernetesService:
         except Exception as exc:
             return {"status": "error", "pod_name": pod_name, "message": str(exc), "events": []}
 
-    def analyze_cluster_incidents(self) -> dict:
+    def analyze_cluster_incidents(self, namespaces: set[str] | None = None) -> dict:
         if not self._load_config():
             return self._not_connected("cluster_incidents")
         try:
-            pods = self.core.list_pod_for_all_namespaces().items
+            pods = self._filter_namespace_items(self.core.list_pod_for_all_namespaces().items, namespaces)
             incidents = []
             ai_summary = ai_runtime_status()
             ai_summary.update({"attempted": False, "assisted_incidents": 0, "last_error": None})
@@ -607,11 +619,13 @@ class KubernetesService:
         except Exception as exc:
             return {"status": "error", "message": str(exc), "summary": {"pods_checked": 0, "incidents_found": 0, "healthy_pods": 0}, "incidents": []}
 
-    def restart_pod_owner(self, pod_name: str, namespace: str | None = None) -> dict:
+    def restart_pod_owner(self, pod_name: str, namespace: str | None = None, namespaces: set[str] | None = None) -> dict:
         if not self._load_config():
             return self._not_connected("restart_pod_owner")
         try:
-            target_namespace = namespace or self._find_pod_namespace(pod_name)
+            if namespace and not self._namespace_visible(namespace, namespaces):
+                return {"status": "forbidden", "message": "Namespace is not available for this user", "pod_name": pod_name}
+            target_namespace = namespace or self._find_pod_namespace(pod_name, namespaces)
             if not target_namespace:
                 return {"status": "not_found", "message": f"Pod {pod_name} was not found", "pod_name": pod_name}
 

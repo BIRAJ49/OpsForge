@@ -1,6 +1,6 @@
 # OpsForge Backend
 
-OpsForge is an AI-powered DevOps/Internal Developer Platform backend for GitOps, observability, security scanning, generated DevOps files, and manual self-healing workflows.
+This backend serves the OpsForge dashboard: auth, project analysis, generated DevOps files, GitOps, Kubernetes visibility, security scanning, and manual healing actions.
 
 The API is designed for the existing React dashboard at `http://localhost:5173` and is served under:
 
@@ -18,13 +18,13 @@ http://localhost:8000/api
 - Pydantic validation
 - JWT access tokens and database-backed refresh tokens
 - bcrypt password hashing
-- GitHub API and GitHub Container Registry integration adapters
-- Kubernetes Python client-ready service boundary
+- GitHub API and GitHub Container Registry adapters
+- Kubernetes service boundary
 - Argo CD API adapter
 - Trivy CLI security scanning
 - Rule-based incident analyzer
-- Rule-based project analyzer and DevOps lifecycle generator
-- Mock monitoring and logs for the MVP
+- Rule-based project analyzer and file generator
+- Mock monitoring and logs for local/demo use
 
 ## Features
 
@@ -37,17 +37,17 @@ http://localhost:8000/api
 - DevOps file generation stored in PostgreSQL
 - Docker, Kubernetes, Helm, GitHub Actions, Argo CD, Terraform, and README generation
 - GitHub repo and GitOps repo creation adapters
-- GHCR image naming and generated workflow placeholders
-- Deployment records and GitOps deployment flow placeholders
+- GHCR image naming and workflow placeholders
+- Deployment records and GitOps flow placeholders
 - Argo CD status/sync/refresh/history endpoints
 - Kubernetes resource endpoints that never expose raw secret values
 - Mock monitoring and log APIs
-- Incidents and rule-based AI analysis
+- Incidents and rule-based analysis with optional AI help
 - Manual self-healing action request, approval, and execution tracking
 - Trivy scan endpoint that fails clearly if Trivy is unavailable
 - Audit logging for sensitive actions
 - Centralized response and error format
-- Secure ZIP/GitHub project import with secret masking and generated lifecycle files
+- ZIP/GitHub project import with secret masking and generated files
 
 ## Folder Structure
 

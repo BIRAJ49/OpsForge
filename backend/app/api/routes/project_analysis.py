@@ -9,7 +9,7 @@ from app.core.permissions import get_current_user, project_for_user, request_met
 from app.core.response import error_response, success_response
 from app.models.project import AppType, DeploymentType, Environment, Project
 from app.models.project_analysis import AnalysisFileSummary, UploadedProject, UploadStatus, UploadType
-from app.schemas.generated_file import GeneratedFileOut
+from app.schemas.generated_file import GeneratedFileOptionOut, GeneratedFileOut
 from app.schemas.project_analysis import (
     AnalysisFileSummaryOut,
     AnalyzeGithubRequest,
@@ -21,7 +21,7 @@ from app.schemas.project_analysis import (
     UploadedProjectOut,
 )
 from app.services.audit_service import record_audit
-from app.services.generate_from_analysis_service import generate_from_analysis, regenerate_one_file
+from app.services.generate_from_analysis_service import build_analysis_files, generate_from_analysis, regenerate_one_file
 from app.services.github_repo_analyzer_service import clone_github_repo
 from app.services.integration_service import get_user_config_value, get_user_secret
 from app.services.project_analyzer_service import analyze_project_path, latest_analysis
@@ -198,6 +198,19 @@ def get_analysis_files(project_id: int, db: Session = Depends(get_db), current_u
     return success_response("Analysis file summaries loaded", [AnalysisFileSummaryOut.model_validate(item).model_dump() for item in files])
 
 
+@router.get("/{project_id}/analysis/generate/options")
+def get_analysis_generation_options(project_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    project = project_for_user(project_id, db, current_user)
+    analysis = latest_analysis(db, project_id)
+    if not analysis:
+        raise HTTPException(status_code=404, detail="Project analysis not found")
+    specs = build_analysis_files(project, analysis, {}, get_user_config_value(db, "github", current_user, "login"))
+    return success_response(
+        "Analysis generation options loaded",
+        [GeneratedFileOptionOut(**{key: spec[key] for key in ("file_name", "file_path", "file_type")}).model_dump() for spec in specs],
+    )
+
+
 @router.post("/{project_id}/generate-from-analysis")
 def generate_files_from_analysis(project_id: int, request: Request, payload: GenerateFromAnalysisRequest | None = None, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     project = project_for_user(project_id, db, current_user)
@@ -205,6 +218,9 @@ def generate_files_from_analysis(project_id: int, request: Request, payload: Gen
     if not analysis:
         return error_response("Project analysis not found", "ANALYSIS_NOT_FOUND", 404)
     options = (payload or GenerateFromAnalysisRequest()).model_dump()
+    selected_file_paths = options.get("selected_file_paths")
+    if selected_file_paths is not None and not selected_file_paths:
+        return error_response("Select at least one file to generate", "NO_FILES_SELECTED", 400)
     if options.get("project_profile"):
         analysis.analysis_json = {**(analysis.analysis_json or {}), "project_profile": options["project_profile"]}
     files = generate_from_analysis(db, project, analysis, options, get_user_config_value(db, "github", current_user, "login"))

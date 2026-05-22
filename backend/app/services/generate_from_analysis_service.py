@@ -87,6 +87,9 @@ def _file(file_name: str, file_path: str, file_type: str, content: str) -> dict[
 def _selected(spec: dict[str, str], options: dict) -> bool:
     path = spec["file_path"]
     file_type = spec["file_type"]
+    selected_file_paths = options.get("selected_file_paths")
+    if selected_file_paths is not None:
+        return path in set(selected_file_paths)
     if file_type == "docker":
         return bool(options.get("generate_docker", True))
     if file_type == "compose":

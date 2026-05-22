@@ -8,42 +8,12 @@ import { api, apiErrorMessage, projectAnalyzerApi, unwrap } from '../services/ap
 
 const progressSteps = ['Uploading project', 'Extracting files', 'Scanning project structure', 'Detecting stack', 'Masking secrets', 'Generating recommendations', 'Generating DevOps files', 'Completed']
 
-const defaultGenerationOptions = {
-  generate_docker: true,
-  generate_compose: true,
-  generate_kubernetes: true,
-  generate_helm: true,
-  generate_github_actions: true,
-  generate_argocd: true,
-  generate_terraform: true,
-  generate_env: true,
-  generate_readme: true,
-  run_security_check: true,
-  create_deployment_plan: true,
-}
-
-const generationOptionGroups = [
-  ['Runtime', [
-    ['generate_docker', 'Dockerfiles', 'Backend and frontend container build files.'],
-    ['generate_compose', 'Docker Compose', 'Local multi-service runtime file.'],
-    ['generate_env', '.env.example', 'Safe placeholder environment template.'],
-  ]],
-  ['Delivery', [
-    ['generate_github_actions', 'GitHub Actions CI/CD', 'Build, test, scan, and push images.'],
-    ['generate_kubernetes', 'Kubernetes YAML', 'Namespace, deployments, services, ingress, HPA, config, and secrets.'],
-    ['generate_argocd', 'Argo CD Application', 'GitOps application manifest. Requires Kubernetes YAML.'],
-    ['generate_helm', 'Helm chart', 'Chart skeleton for packaged Kubernetes delivery.'],
-    ['generate_terraform', 'Terraform', 'Starter AWS infrastructure files.'],
-  ]],
-  ['Documentation and security', [
-    ['run_security_check', 'Security files', 'Trivy config and risk report.'],
-    ['generate_readme', 'README', 'Deployment and usage guide.'],
-    ['create_deployment_plan', 'Deployment plan', 'Step-by-step rollout notes.'],
-  ]],
-]
-
 function CodeBlock({ value }) {
   return <pre className="max-h-64 overflow-auto rounded-md border border-slate-800 bg-slate-950 p-4 text-xs leading-5 text-slate-300">{JSON.stringify(value || {}, null, 2)}</pre>
+}
+
+function fileTypeLabel(fileType = 'other') {
+  return fileType.replace(/_/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase())
 }
 
 export default function ProjectAnalysis() {
@@ -57,7 +27,9 @@ export default function ProjectAnalysis() {
   const [generating, setGenerating] = useState(false)
   const [profile, setProfile] = useState(null)
   const [savingProfile, setSavingProfile] = useState(false)
-  const [generationOptions, setGenerationOptions] = useState(defaultGenerationOptions)
+  const [optionsLoading, setOptionsLoading] = useState(false)
+  const [fileOptions, setFileOptions] = useState([])
+  const [selectedFilePaths, setSelectedFilePaths] = useState([])
 
   useEffect(() => {
     async function load() {
@@ -75,7 +47,14 @@ export default function ProjectAnalysis() {
         const data = unwrap(await projectAnalyzerApi.getProjectAnalysis(projectId))
         setAnalysis(data)
         setProfile(data.analysis_json?.project_profile || null)
-        setFiles(unwrap(await projectAnalyzerApi.getAnalysisFiles(projectId)))
+        const [analysisFiles, generationOptions] = await Promise.all([
+          projectAnalyzerApi.getAnalysisFiles(projectId),
+          projectAnalyzerApi.getAnalysisGenerationOptions(projectId),
+        ])
+        const nextFileOptions = unwrap(generationOptions)
+        setFiles(unwrap(analysisFiles))
+        setFileOptions(nextFileOptions)
+        setSelectedFilePaths(nextFileOptions.map((option) => option.file_path))
       } catch (error) {
         setMessage(apiErrorMessage(error, 'Project analysis not found'))
       } finally {
@@ -86,10 +65,14 @@ export default function ProjectAnalysis() {
   }, [projectId])
 
   async function generate() {
+    if (!selectedFilePaths.length) {
+      setMessage('Select at least one file to generate')
+      return
+    }
     setGenerating(true)
     setMessage('')
     try {
-      await projectAnalyzerApi.generateFromAnalysis(projectId, { ...generationOptions, project_profile: profile })
+      await projectAnalyzerApi.generateFromAnalysis(projectId, { selected_file_paths: selectedFilePaths, project_profile: profile })
       localStorage.setItem('opsforge_last_project_id', projectId)
       navigate('/app/generated-files')
     } catch (error) {
@@ -97,19 +80,6 @@ export default function ProjectAnalysis() {
     } finally {
       setGenerating(false)
     }
-  }
-
-  function updateGenerationOption(key, value) {
-    setGenerationOptions((current) => {
-      const next = { ...current, [key]: value }
-      if (key === 'generate_argocd' && value) {
-        next.generate_kubernetes = true
-      }
-      if (key === 'generate_kubernetes' && !value) {
-        next.generate_argocd = false
-      }
-      return next
-    })
   }
 
   function updateProfile(path, value) {
@@ -139,6 +109,47 @@ export default function ProjectAnalysis() {
       setSavingProfile(false)
     }
   }
+
+  async function refreshGenerationOptions() {
+    if (!projectId) return
+    setOptionsLoading(true)
+    setMessage('')
+    try {
+      const nextFileOptions = unwrap(await projectAnalyzerApi.getAnalysisGenerationOptions(projectId))
+      setFileOptions(nextFileOptions)
+      setSelectedFilePaths(nextFileOptions.map((option) => option.file_path))
+    } catch (error) {
+      setMessage(apiErrorMessage(error, 'Could not load generation options'))
+    } finally {
+      setOptionsLoading(false)
+    }
+  }
+
+  function toggleFilePath(filePath) {
+    setSelectedFilePaths((current) => (
+      current.includes(filePath)
+        ? current.filter((path) => path !== filePath)
+        : [...current, filePath]
+    ))
+  }
+
+  function selectFileType(fileType) {
+    const paths = fileOptions.filter((option) => option.file_type === fileType).map((option) => option.file_path)
+    setSelectedFilePaths((current) => Array.from(new Set([...current, ...paths])))
+  }
+
+  function clearFileType(fileType) {
+    const paths = new Set(fileOptions.filter((option) => option.file_type === fileType).map((option) => option.file_path))
+    setSelectedFilePaths((current) => current.filter((path) => !paths.has(path)))
+  }
+
+  const groupedFileOptions = fileOptions.reduce((groups, option) => {
+    const key = option.file_type || 'other'
+    if (!groups[key]) groups[key] = []
+    groups[key].push(option)
+    return groups
+  }, {})
+  const selectedCount = selectedFilePaths.length
 
   if (!projectId) {
     return (
@@ -170,7 +181,7 @@ export default function ProjectAnalysis() {
         </div>
         <div className="flex gap-2">
           <Button variant="secondary" icon={RefreshCw} onClick={() => window.location.reload()}>Refresh</Button>
-          <Button icon={Rocket} onClick={generate} loading={generating} disabled={!analysis || generating}>{generating ? 'Generating...' : 'Generate DevOps Files'}</Button>
+          <Button icon={Rocket} onClick={generate} loading={generating} disabled={!analysis || generating || !selectedCount}>{generating ? 'Generating...' : 'Generate Selected Files'}</Button>
         </div>
       </div>
       {message ? <div className="rounded-md border border-rose-400/30 bg-rose-400/10 p-3 text-sm text-rose-100">{message}</div> : null}
@@ -246,33 +257,78 @@ export default function ProjectAnalysis() {
             </Card>
           ) : null}
           <Card>
-            <CardHeader title="Files to generate" description="Choose exactly which DevOps files OpsForge should create from the AI-assisted project profile." />
+            <CardHeader
+              title="Files to generate"
+              description="Choose exactly which files OpsForge should create from this analysis."
+              action={(
+                <div className="flex flex-wrap gap-2">
+                  <Button size="sm" variant="ghost" onClick={() => setSelectedFilePaths(fileOptions.map((option) => option.file_path))} disabled={!fileOptions.length}>Select All</Button>
+                  <Button size="sm" variant="ghost" onClick={() => setSelectedFilePaths([])} disabled={!fileOptions.length}>Clear</Button>
+                  <Button size="sm" variant="secondary" icon={RefreshCw} onClick={refreshGenerationOptions} loading={optionsLoading}>Refresh Options</Button>
+                </div>
+              )}
+            />
             <CardContent>
-              <div className="grid gap-5 xl:grid-cols-3">
-                {generationOptionGroups.map(([group, options]) => (
-                  <div key={group} className="rounded-lg border border-slate-800 bg-slate-950/50 p-4">
-                    <h3 className="font-semibold text-white">{group}</h3>
-                    <div className="mt-4 grid gap-3">
-                      {options.map(([key, label, description]) => (
-                        <label key={key} className="flex items-start gap-3 rounded-md border border-slate-800 bg-slate-900/60 p-3 text-sm text-slate-300">
-                          <input
-                            type="checkbox"
-                            checked={Boolean(generationOptions[key])}
-                            onChange={(event) => updateGenerationOption(key, event.target.checked)}
-                            className="mt-1 h-4 w-4 accent-cyan-400"
-                          />
-                          <span>
-                            <span className="block font-medium text-slate-100">{label}</span>
-                            <span className="mt-1 block text-xs leading-5 text-slate-500">{description}</span>
-                          </span>
-                        </label>
-                      ))}
-                    </div>
-                  </div>
-                ))}
+              <div className="mb-4 grid grid-cols-2 rounded-lg border border-slate-800 bg-slate-950/50 text-center sm:max-w-xs">
+                <div className="border-r border-slate-800 p-3">
+                  <p className="text-lg font-semibold text-slate-100">{selectedCount}</p>
+                  <p className="mt-1 text-xs text-slate-500">Selected</p>
+                </div>
+                <div className="p-3">
+                  <p className="text-lg font-semibold text-slate-100">{fileOptions.length}</p>
+                  <p className="mt-1 text-xs text-slate-500">Available</p>
+                </div>
               </div>
+
+              {optionsLoading ? (
+                <div className="rounded-md border border-slate-800 bg-slate-950/60 p-4 text-sm text-slate-400">Loading generation options...</div>
+              ) : (
+                <div className="grid gap-3 lg:grid-cols-2 2xl:grid-cols-3">
+                  {Object.entries(groupedFileOptions).map(([fileType, options]) => {
+                    const selectedInGroup = options.filter((option) => selectedFilePaths.includes(option.file_path)).length
+                    return (
+                      <section key={fileType} className="min-w-0 rounded-md border border-slate-800 bg-slate-950/50">
+                        <div className="flex items-center justify-between gap-2 border-b border-slate-800 px-3 py-2">
+                          <div className="min-w-0">
+                            <p className="truncate text-xs font-semibold uppercase text-slate-300">{fileTypeLabel(fileType)}</p>
+                            <p className="mt-0.5 text-xs text-slate-500">{selectedInGroup}/{options.length} selected</p>
+                          </div>
+                          <div className="flex shrink-0 gap-2">
+                            <button type="button" onClick={() => selectFileType(fileType)} className="text-xs font-medium text-cyan-200 hover:text-white">All</button>
+                            <button type="button" onClick={() => clearFileType(fileType)} className="text-xs font-medium text-slate-400 hover:text-white">None</button>
+                          </div>
+                        </div>
+                        <div className="max-h-56 space-y-1 overflow-y-auto p-2">
+                          {options.map((option) => {
+                            const checked = selectedFilePaths.includes(option.file_path)
+                            return (
+                              <label key={option.file_path} className={`flex cursor-pointer items-start gap-3 rounded-md border px-3 py-2 text-sm transition ${checked ? 'border-cyan-400/40 bg-cyan-400/10' : 'border-transparent hover:border-slate-700 hover:bg-slate-900'}`}>
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={() => toggleFilePath(option.file_path)}
+                                  className="mt-1 h-4 w-4 rounded border-slate-600 bg-slate-950 text-cyan-400 focus:ring-cyan-400"
+                                />
+                                <span className="min-w-0 flex-1">
+                                  <span className="block truncate font-medium text-slate-100">{option.file_name}</span>
+                                  <span className="block truncate text-xs text-slate-500">{option.file_path}</span>
+                                </span>
+                              </label>
+                            )
+                          })}
+                        </div>
+                      </section>
+                    )
+                  })}
+                  {!fileOptions.length ? (
+                    <div className="rounded-md border border-dashed border-slate-700 p-4 text-sm text-slate-400">
+                      No generation options are available for this analysis.
+                    </div>
+                  ) : null}
+                </div>
+              )}
               <div className="mt-4 rounded-md border border-cyan-400/20 bg-cyan-400/10 p-3 text-sm text-cyan-100">
-                Selected files are the only files created. Push to GitHub will push only this generated set.
+                Only selected files will be created. Generated Files will show the output after this step.
               </div>
             </CardContent>
           </Card>
@@ -284,7 +340,7 @@ export default function ProjectAnalysis() {
           </div>
           <Card><CardHeader title="Detected environment variables" /><CardContent><CodeBlock value={analysis.detected_env_vars} /></CardContent></Card>
           <Card><CardHeader title="Important files" /><CardContent><div className="overflow-x-auto"><table className="w-full text-left text-sm"><thead className="text-slate-400"><tr><th className="p-3">Path</th><th className="p-3">Type</th><th className="p-3">Language</th><th className="p-3">Summary</th></tr></thead><tbody>{files.map((file) => <tr key={file.id} className="border-t border-slate-800"><td className="p-3 text-slate-100">{file.file_path}</td><td className="p-3 text-slate-300">{file.file_type}</td><td className="p-3 text-slate-300">{file.language}</td><td className="p-3 text-slate-400">{file.summary}</td></tr>)}</tbody></table></div></CardContent></Card>
-          <div className="flex justify-end gap-2"><Link to="/app/generated-files"><Button variant="secondary" icon={GitBranch}>Generated Files</Button></Link><Button icon={Rocket} onClick={generate} loading={generating} disabled={generating}>Generate DevOps Files</Button></div>
+          <div className="flex justify-end gap-2"><Link to="/app/generated-files"><Button variant="secondary" icon={GitBranch}>Generated Files</Button></Link><Button icon={Rocket} onClick={generate} loading={generating} disabled={generating || !selectedCount}>Generate Selected Files</Button></div>
         </>
       ) : null}
     </div>

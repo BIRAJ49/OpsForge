@@ -109,9 +109,9 @@ function ProtectedRoute({ user, admin = false, userOnly = false, children }) {
 
 function DashboardLayout({ user, children }) {
   return (
-    <div className="lg:pl-72">
+    <div className="min-w-0 lg:pl-72">
       <Sidebar role={user?.role || 'USER'} />
-      <div className="pb-24 lg:pb-0">{children}</div>
+      <div className="min-w-0 pb-24 lg:pb-0">{children}</div>
     </div>
   )
 }
@@ -259,7 +259,7 @@ function AppShell() {
     <div className="min-h-screen">
       <GlobalActivityIndicator />
       <AppNav user={user} onLogout={logout} />
-      <main className="mx-auto min-h-[calc(100vh-4rem)] max-w-[1600px] px-4 py-8 sm:px-6 lg:px-8">
+      <main className="min-h-[calc(100vh-4rem)] w-full min-w-0 px-4 py-6 sm:px-5 lg:px-6">
         <RouteTransitions user={user} onAuthenticated={handleAuthenticated} onLogout={logout} />
       </main>
     </div>

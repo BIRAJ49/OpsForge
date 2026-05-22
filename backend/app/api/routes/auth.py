@@ -30,7 +30,7 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
     return success_response("Login successful", {**tokens, "user": UserOut.model_validate(user).model_dump()})
 
 
-@router.post("/refresh")
+@router.post("/refresh", dependencies=[Depends(rate_limit("refresh", 30, 300))])
 def refresh(payload: RefreshRequest, db: Session = Depends(get_db)):
     user, tokens = auth_service.refresh(db, payload.refresh_token)
     db.commit()
@@ -68,7 +68,7 @@ def forgot_password(payload: ForgotPasswordRequest, request: Request, db: Sessio
     ip, ua = request_meta(request)
     record_audit(db, user_id=None, action="Password reset request", resource_type="user", resource_id=payload.email, ip_address=ip, user_agent=ua)
     db.commit()
-    return success_response("Reset code sent to your email")
+    return success_response("If the account exists, a reset code was sent")
 
 
 @router.post("/reset-password", dependencies=[Depends(rate_limit("reset-password", 5, 900))])

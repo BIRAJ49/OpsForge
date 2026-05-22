@@ -223,7 +223,7 @@ def create_or_update_application(project: Project, path: str = "k8s") -> dict:
 async def list_applications() -> dict:
     if configured():
         try:
-            async with httpx.AsyncClient(timeout=20, verify=False) as client:
+            async with httpx.AsyncClient(timeout=20) as client:
                 resp = await client.get(
                     f"{settings.ARGOCD_SERVER}/api/v1/applications",
                     headers={"Authorization": f"Bearer {settings.ARGOCD_TOKEN}"},
@@ -247,7 +247,7 @@ async def status(project: Project) -> dict:
     name = app_name(project)
     base = _base_status(project)
     if configured():
-        async with httpx.AsyncClient(timeout=20, verify=False) as client:
+        async with httpx.AsyncClient(timeout=20) as client:
             resp = await client.get(f"{settings.ARGOCD_SERVER}/api/v1/applications/{name}", headers={"Authorization": f"Bearer {settings.ARGOCD_TOKEN}"})
         if resp.status_code == 200:
             return {**base, **_application_from_crd(resp.json()), "message": "Argo CD status loaded from API"}

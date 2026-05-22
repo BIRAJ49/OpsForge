@@ -1,6 +1,7 @@
-import { GitBranch, KeyRound, Save } from 'lucide-react'
+import { GitBranch, KeyRound, Save, ShieldCheck } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { useLocation } from 'react-router-dom'
+import { Badge } from '../components/ui/Badge'
 import { Button } from '../components/ui/Button'
 import { Card, CardHeader, CardContent } from '../components/ui/Card'
 import { api, apiErrorMessage, unwrap } from '../services/api'
@@ -16,6 +17,10 @@ const sections = [
 
 export default function Settings() {
   const location = useLocation()
+  const [currentUser, setCurrentUser] = useState(() => {
+    const stored = localStorage.getItem('opsforge_user')
+    return stored ? JSON.parse(stored) : null
+  })
   const [githubStatus, setGithubStatus] = useState(null)
   const [message, setMessage] = useState('')
   const callbackMessage = useMemo(() => {
@@ -28,6 +33,9 @@ export default function Settings() {
   useEffect(() => {
     async function loadStatus() {
       try {
+        const user = unwrap(await api.get('/auth/me'))
+        localStorage.setItem('opsforge_user', JSON.stringify(user))
+        setCurrentUser(user)
         setGithubStatus(unwrap(await api.get('/integrations/github/status')))
       } catch {
         setGithubStatus(null)
@@ -63,6 +71,20 @@ export default function Settings() {
         <CardHeader title="Workspace Configuration" description="Profile, providers, cluster access, and notification preferences." action={<Button icon={Save}>Save Changes</Button>} />
         <CardContent>
           {message || callbackMessage ? <div className="mb-5 rounded-md border border-cyan-400/30 bg-cyan-400/10 p-3 text-sm text-cyan-100">{message || callbackMessage}</div> : null}
+          <div className="mb-6 rounded-lg border border-slate-800 bg-slate-950/60 p-4">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex min-w-0 items-start gap-3">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-cyan-400/30 bg-cyan-400/10">
+                  <ShieldCheck className="h-5 w-5 text-cyan-300" />
+                </div>
+                <div className="min-w-0">
+                  <p className="font-medium text-slate-100">Account access</p>
+                  <p className="mt-1 text-sm text-slate-400">Your workspace only shows projects, generated files, logs, and namespace data available to this account.</p>
+                </div>
+              </div>
+              <Badge tone={currentUser?.role === 'ADMIN' ? 'purple' : 'cyan'}>{currentUser?.role === 'ADMIN' ? 'Admin access' : 'User access'}</Badge>
+            </div>
+          </div>
           <div className="mb-6 rounded-lg border border-slate-800 bg-slate-950/60 p-4">
             <div className="flex flex-col gap-4 lg:flex-row lg:items-end">
               <div className="min-w-0 flex-1">

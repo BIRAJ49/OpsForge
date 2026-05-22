@@ -59,6 +59,9 @@ export const projectAnalyzerApi = {
   getAnalysisFiles(projectId) {
     return api.get(`/projects/${projectId}/analysis/files`)
   },
+  getAnalysisGenerationOptions(projectId) {
+    return api.get(`/projects/${projectId}/analysis/generate/options`)
+  },
   generateFromAnalysis(projectId, payload = {}) {
     return api.post(`/projects/${projectId}/generate-from-analysis`, payload)
   },

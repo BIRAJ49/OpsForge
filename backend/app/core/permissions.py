@@ -2,7 +2,7 @@ from collections import defaultdict, deque
 from datetime import UTC, datetime, timedelta
 from typing import Callable
 
-from fastapi import Depends, Header, HTTPException, Request
+from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
@@ -59,6 +59,16 @@ def project_for_user(project_id: int, db: Session, user: User) -> Project:
     if user.role != UserRole.ADMIN and project.owner_id != user.id:
         raise HTTPException(status_code=403, detail="Permission denied")
     return project
+
+
+def namespaces_for_user(db: Session, user: User) -> set[str] | None:
+    if user.role == UserRole.ADMIN:
+        return None
+    return {
+        namespace
+        for (namespace,) in db.query(Project.namespace).filter(Project.owner_id == user.id).distinct().all()
+        if namespace
+    }
 
 
 def request_meta(request: Request) -> tuple[str | None, str | None]:

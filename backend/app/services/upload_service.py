@@ -36,11 +36,28 @@ def extract_zip_upload(file: UploadFile) -> tuple[Path, dict]:
             members = archive.infolist()
             if not members:
                 raise HTTPException(status_code=400, detail="Invalid ZIP file")
+            total_uncompressed = 0
             for member in members:
                 _validate_zip_member(member)
+                total_uncompressed += member.file_size
+                if total_uncompressed > settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024:
+                    raise HTTPException(status_code=413, detail="Uncompressed ZIP payload is too large")
             extract_dir = temp_dir / "extracted"
             extract_dir.mkdir()
-            archive.extractall(extract_dir)
+            extract_root = extract_dir.resolve()
+            for member in members:
+                if member.is_dir():
+                    continue
+                target = (extract_dir / member.filename).resolve()
+                try:
+                    target.relative_to(extract_root)
+                except ValueError as exc:
+                    raise HTTPException(status_code=400, detail="ZIP path traversal is not allowed") from exc
+                if target.exists() and target.is_symlink():
+                    raise HTTPException(status_code=400, detail="ZIP path traversal is not allowed")
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with archive.open(member) as source, target.open("wb") as destination:
+                    shutil.copyfileobj(source, destination)
             return extract_dir, {"file_count": len([m for m in members if not m.is_dir()]), "total_size": total}
     except zipfile.BadZipFile as exc:
         shutil.rmtree(temp_dir, ignore_errors=True)
@@ -62,5 +79,9 @@ def _validate_zip_member(member: zipfile.ZipInfo) -> None:
     target = Path(name)
     if name.startswith("/") or ".." in target.parts:
         raise HTTPException(status_code=400, detail="ZIP path traversal is not allowed")
+    if Path(name).is_absolute() or member.is_dir() and not name.strip("/"):
+        raise HTTPException(status_code=400, detail="Invalid ZIP path")
+    if (member.external_attr >> 16) & 0o170000 == 0o120000:
+        raise HTTPException(status_code=400, detail="ZIP symlinks are not allowed")
     if member.file_size > settings.MAX_UPLOAD_FILE_SIZE_MB * 1024 * 1024:
         raise HTTPException(status_code=400, detail="ZIP contains a file that is too large")

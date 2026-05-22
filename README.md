@@ -1,6 +1,6 @@
 # OpsForge
 
-OpsForge is an AI-powered Internal Developer Platform that helps users create or upload applications, analyze the project stack, generate production-ready DevOps files, push them to GitHub, deploy through Argo CD GitOps to Kubernetes, monitor workloads, scan images with Trivy, detect incidents, and run controlled self-healing actions.
+OpsForge is a DevOps dashboard for creating or uploading projects, checking the stack, generating deployment files, pushing them to GitHub, deploying with Argo CD, and keeping an eye on Kubernetes, logs, scans, and incidents.
 
 Live deployment:
 
@@ -13,7 +13,7 @@ https://opsforge.birajadhikari49.com.np
 - Authentication with user and admin roles
 - Manual DevOps project generation
 - Project upload and GitHub repository analysis
-- Rule-based and AI-assisted project recommendations
+- Project recommendations from rules, with AI assistance when configured
 - Secret masking during project analysis
 - Docker, Compose, Kubernetes, Helm, Argo CD, GitHub Actions, Terraform, Trivy, and README file generation
 - Generated file preview, copy, regenerate, individual download, and ZIP download
@@ -23,47 +23,47 @@ https://opsforge.birajadhikari49.com.np
 - Kubernetes pods, services, events, logs, and incident data in the dashboard
 - Prometheus, Grafana, and Loki installed for observability
 - Trivy image security scanning
-- AI/rule-based incident suggestions
+- Incident suggestions from rules, with AI assistance when configured
 - Healing action request and execution flow
 - Admin dashboard for user management, project visibility, usage, and audit logs
-- GitHub Actions workflow for OpsForge platform CI/CD image builds
+- GitHub Actions workflow for OpsForge image builds and deployment
 - Custom domain and HTTPS using cert-manager and Let's Encrypt
 
 ## Screenshots
 
 ### Landing Page
 
-OpsForge is deployed with a custom HTTPS domain and presents the main platform value: DevOps generation, GitOps deployment, observability, security, and incident response.
+OpsForge is deployed behind HTTPS and shows the main user flows: file generation, GitOps deployment, monitoring, scanning, and incident handling.
 
 ![OpsForge landing page](screenshoot/01-landing.png)
 
 ### Login
 
-The platform supports authenticated user and admin access.
+The app supports separate user and admin accounts.
 
 ![OpsForge login page](screenshoot/02-login.png)
 
 ### User Dashboard
 
-Normal users access the project workflow from the user dashboard, including project generation and upload flows.
+Users can create projects, upload existing code, and open their saved work from the dashboard.
 
 ![OpsForge user dashboard](screenshoot/03-user-dashboard.png)
 
 ### Manual Project Generation
 
-Users can manually select the DevOps category, difficulty level, and requirements before generating a project.
+Users choose a category, difficulty level, and requirements before generating files.
 
 ![OpsForge create project page](screenshoot/04-create-project.png)
 
 ### AI Project Analyzer
 
-Uploaded projects are analyzed safely as metadata. OpsForge detects stack details, ports, package manager, existing DevOps files, missing files, security warnings, and recommended next steps.
+Uploaded projects are analyzed as metadata. OpsForge detects stack details, ports, package managers, existing DevOps files, missing files, security warnings, and next steps.
 
 ![OpsForge project analysis result](screenshoot/05-project-analysis.png)
 
 ### Generated DevOps Files
 
-OpsForge generates lifecycle files for Docker, CI/CD, Kubernetes, Helm, Argo CD, Terraform, Trivy, environment examples, and deployment documentation.
+OpsForge generates Docker, CI/CD, Kubernetes, Helm, Argo CD, Terraform, Trivy, env example, and deployment docs.
 
 ![OpsForge generated files](screenshoot/06-generated-files.png)
 
@@ -75,7 +75,7 @@ Each generated file has an isolated preview page with copy and download actions.
 
 ### GitHub Actions CI/CD
 
-OpsForge includes a working GitHub Actions pipeline that tests the backend, builds the frontend, builds Docker images, pushes platform images to GHCR, and deploys the updated platform to K3s on EC2.
+OpsForge includes a GitHub Actions pipeline that tests the backend, builds the frontend, builds Docker images, pushes them to GHCR, and updates the K3s deployment on EC2.
 
 ![OpsForge GitHub Actions CI/CD deployment](screenshoot/08-github-actions-cd.png)
 
@@ -86,7 +86,7 @@ User creates or uploads a project
         ↓
 OpsForge analyzes the stack and requirements
         ↓
-OpsForge generates DevOps lifecycle files
+OpsForge generates DevOps files
         ↓
 User previews, copies, downloads, or regenerates files
         ↓
@@ -101,7 +101,7 @@ OpsForge shows Kubernetes, logs, security, incidents, and healing actions
 
 ## CI/CD
 
-OpsForge includes a GitHub Actions workflow for the platform itself:
+OpsForge has a GitHub Actions workflow for this repo:
 
 - Runs backend tests
 - Builds the frontend
@@ -122,7 +122,7 @@ ghcr.io/biraj49/opsforge-backend:latest
 ghcr.io/biraj49/opsforge-frontend:latest
 ```
 
-The current deployment step is GitOps-oriented: images are pushed to GHCR, then Kubernetes deployments can be restarted or synced through Argo CD.
+The deployment flow pushes images to GHCR, then updates Kubernetes through a restart or Argo CD sync.
 
 ## GitOps And Kubernetes
 
@@ -145,15 +145,15 @@ The cluster includes:
 - Grafana for dashboards
 - Loki and Promtail for logs
 
-OpsForge also exposes monitoring pages that read real cluster metrics and workload data.
+OpsForge also has monitoring pages for cluster metrics and workload data.
 
 ## Security Scanning
 
-Trivy is integrated for image scanning. Scan results are shown in the OpsForge security dashboard with severity, target, recommendation, and status.
+Trivy is used for image scanning. Results show severity, target, recommendation, and status.
 
 ## Incident Analysis And Healing
 
-OpsForge detects unhealthy Kubernetes workloads and produces incident suggestions using rule-based logic and AI assistance when configured. Users can create incidents and request restart actions. Admin-controlled execution is supported for risky actions.
+OpsForge detects unhealthy Kubernetes workloads and suggests fixes using rules, with AI assistance when configured. Users can create incidents and request restarts. Admin approval is used for risky actions.
 
 ## Admin Dashboard
 
@@ -168,11 +168,11 @@ Admins can:
 - Review system usage
 - Review audit logs
 
-Admins cannot use the normal project creation and upload workflow.
+Admins use the admin area instead of the normal project creation and upload flow.
 
 ## Audit Logs
 
-OpsForge records important actions including:
+OpsForge records important actions:
 
 - User login/logout
 - Project creation and deletion
@@ -313,4 +313,4 @@ SMTP_FROM_EMAIL
 
 ## Project Summary
 
-OpsForge demonstrates a practical Internal Developer Platform workflow: project analysis, DevOps file generation, GitHub automation, container image delivery, GitOps deployment, Kubernetes visibility, security scanning, incident analysis, and controlled self-healing from one dashboard.
+OpsForge brings the main project operations into one place: analysis, file generation, GitHub push, image delivery, GitOps deployment, Kubernetes visibility, security scans, incident review, and controlled healing actions.
