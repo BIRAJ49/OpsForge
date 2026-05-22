@@ -199,8 +199,8 @@ export default function UserDashboard({ user }) {
               <p className="text-xs font-bold uppercase tracking-[0.35em] text-cyan-300">OpsForge Workspace</p>
               <h1 className="mt-1 text-2xl font-bold text-white">Project Control Center</h1>
             </div>
-            <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-end">
-              <label className="flex h-10 min-w-0 items-center gap-2 rounded-lg border border-slate-800 bg-slate-900/70 px-3 text-sm text-slate-500 transition focus-within:border-cyan-400/70 focus-within:bg-slate-950 sm:w-72">
+            <div className="flex flex-col gap-3 sm:flex-row sm:flex-nowrap sm:items-center sm:justify-end">
+              <label className="flex h-10 min-w-0 items-center gap-2 rounded-lg border border-slate-800 bg-slate-900/70 px-3 text-sm text-slate-500 transition focus-within:border-cyan-400/70 focus-within:bg-slate-950 sm:w-56 md:w-64 2xl:w-72">
                 <Search className="h-4 w-4 shrink-0" />
                 <input
                   value={searchQuery}

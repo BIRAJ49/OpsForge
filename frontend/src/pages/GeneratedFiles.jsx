@@ -74,6 +74,17 @@ export default function GeneratedFiles() {
     setMessageTone(tone)
   }, [])
 
+  const loadFileContents = useCallback(async (generatedFiles) => {
+    const filesWithContent = await Promise.all(
+      generatedFiles.map(async (file) => {
+        if (!file.id || file.content != null) return file
+        const data = unwrap(await api.get(`/generated-files/${file.id}`))
+        return data
+      }),
+    )
+    return filesWithContent
+  }, [])
+
   const loadFilesForProject = useCallback(async (nextProjectId, options = {}) => {
     if (!nextProjectId) {
       setFiles([])
@@ -98,7 +109,7 @@ export default function GeneratedFiles() {
       ])
       const generatedFiles = unwrap(generatedResponse)
       const availableOptions = unwrap(optionsResponse)
-      setFiles(generatedFiles)
+      setFiles(await loadFileContents(generatedFiles))
       setFileOptions(availableOptions)
       setSelectedFilePaths(availableOptions.map((option) => option.file_path))
       if (!generatedFiles.length) {
@@ -110,7 +121,7 @@ export default function GeneratedFiles() {
       setFilesLoading(false)
       setOptionsLoading(false)
     }
-  }, [showMessage])
+  }, [loadFileContents, showMessage])
 
   useEffect(() => {
     async function loadProjects() {
@@ -168,7 +179,7 @@ export default function GeneratedFiles() {
     }
     try {
       const data = unwrap(await api.post(`/projects/${projectId}/generate`, { selected_file_paths: selectedFilePaths }))
-      setFiles(data)
+      setFiles(await loadFileContents(data))
       showMessage(`Generated ${data.length} selected file${data.length === 1 ? '' : 's'} for the selected project.`, 'success')
     } catch (error) {
       showMessage(apiErrorMessage(error, 'Could not generate project files'), 'error')
@@ -268,6 +279,12 @@ export default function GeneratedFiles() {
   }, {})
   const selectedCount = selectedFilePaths.length
   const generatedPaths = new Set(files.map((file) => file.file_path))
+  const groupedGeneratedFiles = files.reduce((groups, file) => {
+    const key = file.file_type || 'other'
+    if (!groups[key]) groups[key] = []
+    groups[key].push(file)
+    return groups
+  }, {})
 
   return (
     <Card>
@@ -456,35 +473,51 @@ export default function GeneratedFiles() {
                 ) : null}
 
                 {!filesLoading && files.length ? (
-                  <div className="divide-y divide-slate-800">
-                    {files.map((file) => (
-                      <div key={file.id || file.file_name} className="grid gap-3 px-4 py-3 transition hover:bg-slate-900/60 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
-                        <div className="flex min-w-0 items-start gap-3">
-                          <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-cyan-400/25 bg-cyan-400/10">
-                            <FileCode2 className="h-4 w-4 text-cyan-300" />
+                  <div className="space-y-5 p-4">
+                    {Object.entries(groupedGeneratedFiles).map(([fileType, generatedFiles]) => (
+                      <section key={fileType} className="space-y-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <div>
+                            <p className="text-sm font-semibold text-slate-100">{fileTypeLabel(fileType)}</p>
+                            <p className="mt-1 text-xs text-slate-500">{generatedFiles.length} generated file{generatedFiles.length === 1 ? '' : 's'}</p>
                           </div>
-                          <div className="min-w-0">
-                            <p className="truncate text-sm font-semibold text-slate-100">{file.file_name}</p>
-                            <p className="mt-1 truncate text-xs text-slate-500">{file.file_path}</p>
-                          </div>
+                          <Badge tone="purple">{fileTypeLabel(fileType)}</Badge>
                         </div>
-                        <div className="flex flex-wrap items-center gap-2 lg:justify-end">
-                          <Badge tone="purple">{fileTypeLabel(file.file_type)}</Badge>
-                          <Link to={file.id ? `/app/generated-files/${file.id}` : '#'} className={!file.id ? 'pointer-events-none' : ''}>
-                            <Button size="sm" variant="ghost" icon={Eye} disabled={!file.id}>Preview</Button>
-                          </Link>
-                          <Button size="sm" variant="secondary" icon={Download} onClick={() => downloadFile(file)} disabled={!file.id}>Download</Button>
-                          <div className="relative inline-flex">
-                            {copiedFileId === file.id ? (
-                              <div className="absolute bottom-full left-1/2 z-20 mb-2 -translate-x-1/2 whitespace-nowrap rounded-md border border-emerald-400/40 bg-emerald-500 px-3 py-1.5 text-xs font-medium text-slate-950 shadow-lg shadow-emerald-950/30">
-                                Code copied
+
+                        <div className="space-y-4">
+                          {generatedFiles.map((file) => (
+                            <article key={file.id || file.file_path || file.file_name} className="overflow-hidden rounded-lg border border-slate-800 bg-slate-950">
+                              <div className="grid gap-3 border-b border-slate-800 px-4 py-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
+                                <div className="flex min-w-0 items-start gap-3">
+                                  <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-cyan-400/25 bg-cyan-400/10">
+                                    <FileCode2 className="h-4 w-4 text-cyan-300" />
+                                  </div>
+                                  <div className="min-w-0">
+                                    <p className="truncate text-sm font-semibold text-slate-100">{file.file_name}</p>
+                                    <p className="mt-1 truncate text-xs text-slate-500">{file.file_path}</p>
+                                  </div>
+                                </div>
+                                <div className="flex flex-wrap items-center gap-2 lg:justify-end">
+                                  <Link to={file.id ? `/app/generated-files/${file.id}` : '#'} className={!file.id ? 'pointer-events-none' : ''}>
+                                    <Button size="sm" variant="ghost" icon={Eye} disabled={!file.id}>Preview</Button>
+                                  </Link>
+                                  <Button size="sm" variant="secondary" icon={Download} onClick={() => downloadFile(file)} disabled={!file.id}>Download</Button>
+                                  <div className="relative inline-flex">
+                                    {copiedFileId === file.id ? (
+                                      <div className="absolute bottom-full left-1/2 z-20 mb-2 -translate-x-1/2 whitespace-nowrap rounded-md border border-emerald-400/40 bg-emerald-500 px-3 py-1.5 text-xs font-medium text-slate-950 shadow-lg shadow-emerald-950/30">
+                                        Code copied
+                                      </div>
+                                    ) : null}
+                                    <Button size="sm" variant="primary" icon={Copy} onClick={() => copyFile(file)} disabled={!file.id}>Copy</Button>
+                                  </div>
+                                  <Button size="sm" variant="secondary" icon={RefreshCw} onClick={() => regenerateFile(file)} disabled={!file.id || !projectId}>Regenerate</Button>
+                                </div>
                               </div>
-                            ) : null}
-                            <Button size="sm" variant="primary" icon={Copy} onClick={() => copyFile(file)} disabled={!file.id}>Copy</Button>
-                          </div>
-                          <Button size="sm" variant="secondary" icon={RefreshCw} onClick={() => regenerateFile(file)} disabled={!file.id || !projectId}>Regenerate</Button>
+                              <pre className="max-h-96 overflow-auto p-4 text-xs leading-5 text-slate-300"><code>{file.content || 'File content is empty.'}</code></pre>
+                            </article>
+                          ))}
                         </div>
-                      </div>
+                      </section>
                     ))}
                   </div>
                 ) : null}
