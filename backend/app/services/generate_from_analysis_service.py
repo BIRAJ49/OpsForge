@@ -5,12 +5,14 @@ from app.core.config import settings
 from app.models.generated_file import GeneratedFile
 from app.models.project import Project
 from app.models.project_analysis import ProjectAnalysis
+from app.services.ai_service import suggest_generated_file_content
 from app.services.namespace_service import user_app_namespace
 
 
 def generate_from_analysis(db: Session, project: Project, analysis: ProjectAnalysis, options: dict | None = None, github_username: str | None = None) -> list[GeneratedFile]:
     options = options or {}
     specs = build_analysis_files(project, analysis, options, github_username)
+    specs = _ai_refine_specs(project, analysis, specs)
     db.execute(delete(GeneratedFile).where(GeneratedFile.project_id == project.id))
     files = [GeneratedFile(project_id=project.id, **spec) for spec in specs]
     db.add_all(files)
@@ -23,7 +25,7 @@ def regenerate_one_file(db: Session, project: Project, analysis: ProjectAnalysis
     if file_path not in specs:
         raise ValueError("Unsupported generated file")
     existing = next((f for f in project.generated_files if f.file_path == file_path), None)
-    spec = specs[file_path]
+    spec = _ai_refine_specs(project, analysis, [specs[file_path]])[0]
     if existing:
         for key, value in spec.items():
             setattr(existing, key, value)
@@ -78,6 +80,44 @@ def build_analysis_files(project: Project, analysis: ProjectAnalysis, options: d
         _file("risk-report.md", "docs/risk-report.md", "docs", f"# Risk Report\n\nRisk score: {analysis.risk_score}\n\nWarnings:\n" + "\n".join(f"- {item}" for item in analysis.security_warnings)),
     ]
     return [spec for spec in specs if _selected(spec, options)]
+
+
+def _ai_refine_specs(project: Project, analysis: ProjectAnalysis, specs: list[dict[str, str]]) -> list[dict[str, str]]:
+    project_profile = (analysis.analysis_json or {}).get("project_profile") or {}
+    project_context = {
+        "name": project.name,
+        "environment": project.environment.value,
+        "deployment_type": project.deployment_type.value,
+        "namespace": user_app_namespace(project.environment.value, project.namespace),
+        "github_repo_url_configured": bool(project.github_repo_url),
+        "profile": project_profile,
+    }
+    analysis_context = {
+        "detected_project_type": analysis.detected_project_type,
+        "detected_stack": analysis.detected_stack,
+        "frontend_path": analysis.frontend_path,
+        "backend_path": analysis.backend_path,
+        "package_manager": analysis.package_manager,
+        "build_commands": analysis.build_commands,
+        "start_commands": analysis.start_commands,
+        "detected_ports": analysis.detected_ports,
+        "detected_databases": analysis.detected_databases,
+        "detected_cache": analysis.detected_cache,
+        "detected_env_var_names": sorted((analysis.detected_env_vars or {}).keys()),
+        "recommended_deployment_strategy": analysis.recommended_deployment_strategy,
+        "risk_score": analysis.risk_score,
+        "security_warnings": (analysis.security_warnings or [])[:12],
+    }
+    refined_specs = []
+    diagnostics = []
+    for spec in specs:
+        file_diagnostics: dict = {"file_path": spec["file_path"]}
+        refined = suggest_generated_file_content(spec, project_context, analysis_context, file_diagnostics)
+        diagnostics.append(file_diagnostics)
+        refined_specs.append(refined or spec)
+    if diagnostics:
+        analysis.analysis_json = {**(analysis.analysis_json or {}), "generated_files_ai": diagnostics}
+    return refined_specs
 
 
 def _file(file_name: str, file_path: str, file_type: str, content: str) -> dict[str, str]:

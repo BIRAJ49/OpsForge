@@ -155,6 +155,20 @@ def _normalize_project_profile(payload: dict[str, Any], fallback_profile: dict[s
     return profile
 
 
+def _normalize_generated_file(payload: dict[str, Any], fallback_spec: dict[str, str], *, model: str) -> dict[str, str] | None:
+    content = payload.get("content")
+    if not isinstance(content, str) or not content.strip():
+        return None
+    if len(content) > 40_000:
+        content = content[:40_000]
+    for pattern in SECRET_PATTERNS:
+        content = pattern.sub(lambda match: f"{match.group(1)}=********", content)
+    return {
+        **fallback_spec,
+        "content": content,
+    }
+
+
 def _fallback_text_ai_fix(content: str, rule_analysis: dict[str, Any], *, model: str) -> dict[str, Any] | None:
     clean = _clean_ai_field(content, limit=1200)
     if clean.startswith("{") or '"suggested_fix"' in clean or '"likely_cause"' in clean:
@@ -513,6 +527,106 @@ def suggest_project_profile(static_analysis: dict[str, Any], fallback_profile: d
                 continue
             normalized = _normalize_project_profile(parsed, fallback_profile, model=model)
             if normalized.get("frontend") or normalized.get("backend"):
+                if diagnostics is not None:
+                    diagnostics["last_error"] = None
+                    diagnostics["selected_model"] = model
+                return normalized
+        except httpx.TimeoutException:
+            if diagnostics is not None:
+                diagnostics["last_error"] = f"{model} timed out after {settings.AI_REQUEST_TIMEOUT_SECONDS}s"
+            continue
+        except httpx.HTTPError as exc:
+            if diagnostics is not None:
+                diagnostics["last_error"] = f"{model} request failed: {str(exc)[:220]}"
+            continue
+        except Exception as exc:
+            if diagnostics is not None:
+                diagnostics["last_error"] = f"{model} failed: {type(exc).__name__}: {str(exc)[:220]}"
+            continue
+    return None
+
+
+def suggest_generated_file_content(
+    spec: dict[str, str],
+    project_context: dict[str, Any],
+    analysis_context: dict[str, Any],
+    diagnostics: dict[str, Any] | None = None,
+) -> dict[str, str] | None:
+    if diagnostics is not None:
+        diagnostics.update(ai_runtime_status())
+        diagnostics["attempted"] = False
+        diagnostics["attempted_models"] = []
+        diagnostics["last_error"] = None
+    if not settings.AI_ENABLED:
+        if diagnostics is not None:
+            diagnostics["last_error"] = "AI_ENABLED is false"
+        return None
+    if settings.AI_PROVIDER.lower() != "openrouter":
+        if diagnostics is not None:
+            diagnostics["last_error"] = f"Unsupported AI_PROVIDER for this flow: {settings.AI_PROVIDER}"
+        return None
+    if not settings.OPENROUTER_API_KEY:
+        if diagnostics is not None:
+            diagnostics["last_error"] = "OPENROUTER_API_KEY is not configured"
+        return None
+
+    fallback_spec = {key: spec[key] for key in ("file_name", "file_path", "file_type", "content")}
+    user_prompt = {
+        "task": "Improve this generated DevOps file for the analyzed project.",
+        "constraints": [
+            "Return compact valid JSON only.",
+            "Keep the same file_path, file_name, and file_type.",
+            "Return only one file in the content field.",
+            "Do not invent secret values.",
+            "Use placeholders such as replace-with-secure-value for secrets.",
+            "Keep commands practical for the detected project paths and package managers.",
+            "Prefer safe defaults for Docker, Compose, Kubernetes, Helm, Argo CD, Terraform, GitHub Actions, and docs.",
+        ],
+        "project": project_context,
+        "analysis": analysis_context,
+        "file": fallback_spec,
+        "required_json_shape": {
+            "content": "string",
+        },
+    }
+    headers = {
+        "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": settings.FRONTEND_URL,
+        "X-Title": settings.APP_NAME,
+    }
+    retry_statuses = {400, 402, 404, 408, 409, 429, 500, 502, 503, 504}
+    for model in _openrouter_model_candidates():
+        if diagnostics is not None:
+            diagnostics["attempted"] = True
+            diagnostics["attempted_models"].append(model)
+        body = {
+            "model": model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "You are a senior DevOps engineer. Return only valid JSON for one generated file.",
+                },
+                {"role": "user", "content": json.dumps(user_prompt)},
+            ],
+            "temperature": 0.12,
+            "max_tokens": 2200,
+        }
+        try:
+            response = httpx.post(OPENROUTER_CHAT_URL, headers=headers, json=body, timeout=settings.AI_REQUEST_TIMEOUT_SECONDS)
+            if response.status_code in retry_statuses:
+                if diagnostics is not None:
+                    diagnostics["last_error"] = f"{model} returned HTTP {response.status_code}: {response.text[:240]}"
+                continue
+            response.raise_for_status()
+            content = response.json()["choices"][0]["message"]["content"]
+            parsed = _extract_json(content)
+            if not parsed:
+                if diagnostics is not None:
+                    diagnostics["last_error"] = f"{model} returned an empty or unusable response"
+                continue
+            normalized = _normalize_generated_file(parsed, fallback_spec, model=model)
+            if normalized:
                 if diagnostics is not None:
                     diagnostics["last_error"] = None
                     diagnostics["selected_model"] = model
