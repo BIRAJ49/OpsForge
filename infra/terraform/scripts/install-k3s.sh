@@ -6,7 +6,7 @@ apt-get install -y curl
 
 curl -sfL https://get.k3s.io | \
   INSTALL_K3S_CHANNEL="stable" \
-  INSTALL_K3S_EXEC="server --disable=traefik" \
+  INSTALL_K3S_EXEC="server --disable=traefik --cluster-cidr=10.244.0.0/16 --service-cidr=10.96.0.0/12 --cluster-dns=10.96.0.10" \
   sh -
 
 until k3s kubectl get nodes --no-headers 2>/dev/null | grep -q .; do
@@ -19,3 +19,6 @@ mkdir -p /home/ubuntu/.kube
 cp /etc/rancher/k3s/k3s.yaml /home/ubuntu/.kube/config
 chown -R ubuntu:ubuntu /home/ubuntu/.kube
 chmod 600 /home/ubuntu/.kube/config
+
+grep -qxF 'export KUBECONFIG="$HOME/.kube/config"' /home/ubuntu/.profile || \
+  printf '\nexport KUBECONFIG="$HOME/.kube/config"\n' >> /home/ubuntu/.profile
