@@ -10,3 +10,10 @@ resources:
   - backend.yaml
   - frontend.yaml
   - ingress.yaml
+  - sealed-secret.yaml
+
+images:
+  - name: ghcr.io/biraj49/opsforge-backend
+    newTag: latest
+  - name: ghcr.io/biraj49/opsforge-frontend
+    newTag: latest

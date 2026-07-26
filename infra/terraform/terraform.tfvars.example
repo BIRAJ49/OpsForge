@@ -1,0 +1,10 @@
+aws_region          = "us-east-1"
+environment         = "production"
+instance_type       = "m7i-flex.large"
+root_volume_size    = 50
+ssh_public_key_path = "~/.ssh/opsforge-gitops.pub"
+ssh_allowed_cidr    = "203.0.113.10/32"
+
+# Leave both values empty until DNS cutover is ready.
+domain_name      = ""
+route53_zone_name = ""

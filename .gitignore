@@ -20,6 +20,21 @@ backend/app/**/__pycache__
 backend/alembic/**/__pycache__
 backend/opsforge-dev.db
 
+# Terraform local data and state
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+*.tfvars
+*.tfvars.json
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
