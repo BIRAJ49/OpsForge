@@ -2,18 +2,20 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
 resources:
-  - namespace.yaml
-  - configmap.yaml
-  - rbac.yaml
-  - postgres.yaml
-  - redis.yaml
-  - backend.yaml
-  - frontend.yaml
-  - ingress.yaml
-  - sealed-secret.yaml
+- namespace.yaml
+- configmap.yaml
+- rbac.yaml
+- postgres.yaml
+- redis.yaml
+- backend.yaml
+- frontend.yaml
+- ingress.yaml
+- sealed-secret.yaml
 
 images:
-  - name: ghcr.io/biraj49/opsforge-backend
-    newTag: latest
-  - name: ghcr.io/biraj49/opsforge-frontend
-    newTag: latest
+- name: ghcr.io/biraj49/opsforge-backend
+  newName: ghcr.io/biraj49/opsforge-backend
+  newTag: 63eafd95844b73ecd6f28969ed490ae8c07baae5
+- name: ghcr.io/biraj49/opsforge-frontend
+  newName: ghcr.io/biraj49/opsforge-frontend
+  newTag: 63eafd95844b73ecd6f28969ed490ae8c07baae5
