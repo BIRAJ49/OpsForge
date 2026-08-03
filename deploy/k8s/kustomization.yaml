@@ -4,3 +4,6 @@ kind: Kustomization
 resources:
   - applications/ingress-nginx.yaml
   - applications/opsforge.yaml
+  - applications/monitoring.yaml
+  - applications/loki.yaml
+  - applications/alloy.yaml
