@@ -15,7 +15,7 @@ resources:
 images:
 - name: ghcr.io/biraj49/opsforge-backend
   newName: ghcr.io/biraj49/opsforge-backend
-  newTag: 852d0aca8a6b1557d90fe325950df6574ac5d9cc
+  newTag: 201880493097e34c334b49427b65bc19996c9e61
 - name: ghcr.io/biraj49/opsforge-frontend
   newName: ghcr.io/biraj49/opsforge-frontend
-  newTag: 852d0aca8a6b1557d90fe325950df6574ac5d9cc
+  newTag: 201880493097e34c334b49427b65bc19996c9e61
