@@ -4,11 +4,18 @@ metadata:
   name: opsforge
   namespace: opsforge-system
   annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-production
     nginx.ingress.kubernetes.io/proxy-body-size: "500m"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
 spec:
   ingressClassName: nginx
+  tls:
+    - hosts:
+        - opsforge.birajadhikari49.com.np
+      secretName: opsforge-tls
   rules:
-    - http:
+    - host: opsforge.birajadhikari49.com.np
+      http:
         paths:
           - path: /
             pathType: Prefix
