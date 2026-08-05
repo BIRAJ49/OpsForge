@@ -48,3 +48,55 @@ spec:
           annotations:
             summary: OpsForge container is repeatedly restarting
             description: A container restarted more than twice during the last 15 minutes.
+
+    - name: opsforge.backups
+      rules:
+        - alert: OpsForgePostgresBackupFailed
+          expr: |
+            kube_job_status_failed{
+              namespace="opsforge-system",
+              job_name=~"postgres-backup-.*"
+            } > 0
+          for: 2m
+          labels:
+            severity: warning
+          annotations:
+            summary: OpsForge PostgreSQL backup failed
+            description: A PostgreSQL backup Job has failed and requires investigation.
+
+        - alert: OpsForgePostgresBackupMissing
+          expr: |
+            (
+              time() - max(
+                kube_job_status_completion_time{
+                  namespace="opsforge-system",
+                  job_name=~"postgres-backup-.*"
+                }
+              ) > 93600
+            )
+            or
+            absent(
+              kube_job_status_completion_time{
+                namespace="opsforge-system",
+                job_name=~"postgres-backup-.*"
+              }
+            )
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: OpsForge PostgreSQL backup is missing
+            description: No successful PostgreSQL backup has completed within the last 26 hours.
+
+        - alert: OpsForgePostgresBackupSuspended
+          expr: |
+            kube_cronjob_spec_suspend{
+              namespace="opsforge-system",
+              cronjob="postgres-backup"
+            } == 1
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: OpsForge PostgreSQL backups are suspended
+            description: The PostgreSQL backup CronJob has been suspended for five minutes.
