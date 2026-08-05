@@ -57,7 +57,7 @@ spec:
                     secretKeyRef:
                       name: opsforge-secret
                       key: POSTGRES_USER
-                - name: POSTGRES_PASSWORD
+                - name: PGPASSWORD
                   valueFrom:
                     secretKeyRef:
                       name: opsforge-secret
