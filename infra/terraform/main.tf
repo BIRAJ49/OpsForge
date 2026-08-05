@@ -132,6 +132,7 @@ resource "aws_instance" "opsforge" {
   subnet_id                   = aws_subnet.public.id
   vpc_security_group_ids      = [aws_security_group.opsforge.id]
   key_name                    = aws_key_pair.opsforge.key_name
+  iam_instance_profile        = aws_iam_instance_profile.opsforge.name
   associate_public_ip_address = true
   user_data                   = file("${path.module}/scripts/install-k3s.sh")
   user_data_replace_on_change = true
@@ -144,8 +145,9 @@ resource "aws_instance" "opsforge" {
   }
 
   metadata_options {
-    http_endpoint = "enabled"
-    http_tokens   = "required"
+    http_endpoint               = "enabled"
+    http_tokens                 = "required"
+    http_put_response_hop_limit = 2
   }
 
   tags = {
