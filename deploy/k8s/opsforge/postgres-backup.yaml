@@ -1,0 +1,136 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: postgres-backup
+  namespace: opsforge-system
+spec:
+  schedule: "0 2 * * *"
+  timeZone: Asia/Kathmandu
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 1800
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            app: postgres-backup
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          securityContext:
+            fsGroup: 999
+            seccompProfile:
+              type: RuntimeDefault
+
+          initContainers:
+            - name: dump
+              image: postgres@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+              imagePullPolicy: IfNotPresent
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -eu
+
+                  pg_dump \
+                    --host="${PGHOST}" \
+                    --username="${POSTGRES_USER}" \
+                    --dbname="${POSTGRES_DB}" \
+                    --format=custom \
+                    --compress=6 \
+                    --no-owner \
+                    --no-privileges \
+                    --file=/backup/opsforge.dump
+
+                  pg_restore --list /backup/opsforge.dump >/dev/null
+                  sha256sum /backup/opsforge.dump > /backup/opsforge.dump.sha256
+              env:
+                - name: PGHOST
+                  value: postgres
+                - name: POSTGRES_USER
+                  valueFrom:
+                    secretKeyRef:
+                      name: opsforge-secret
+                      key: POSTGRES_USER
+                - name: POSTGRES_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: opsforge-secret
+                      key: POSTGRES_PASSWORD
+                - name: POSTGRES_DB
+                  valueFrom:
+                    secretKeyRef:
+                      name: opsforge-secret
+                      key: POSTGRES_DB
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 128Mi
+                limits:
+                  cpu: 500m
+                  memory: 512Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop:
+                    - ALL
+              volumeMounts:
+                - name: backup
+                  mountPath: /backup
+
+          containers:
+            - name: upload
+              image: amazon/aws-cli@sha256:a5faa1d6b65c5afe675052599027bf46eb02b020ec153deefe4317f109c4bb92
+              imagePullPolicy: IfNotPresent
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -eu
+
+                  timestamp="$(date -u +%Y-%m-%dT%H-%M-%SZ)"
+                  destination="s3://${BACKUP_BUCKET}/postgres/opsforge-${timestamp}"
+
+                  aws s3 cp \
+                    /backup/opsforge.dump \
+                    "${destination}.dump" \
+                    --sse AES256 \
+                    --only-show-errors
+
+                  aws s3 cp \
+                    /backup/opsforge.dump.sha256 \
+                    "${destination}.dump.sha256" \
+                    --sse AES256 \
+                    --only-show-errors
+
+                  echo "Backup uploaded: ${destination}.dump"
+              env:
+                - name: AWS_REGION
+                  value: us-east-1
+                - name: BACKUP_BUCKET
+                  value: opsforge-postgres-backups-396868033396-us-east-1
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 128Mi
+                limits:
+                  cpu: 500m
+                  memory: 512Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop:
+                    - ALL
+              volumeMounts:
+                - name: backup
+                  mountPath: /backup
+
+          volumes:
+            - name: backup
+              emptyDir:
+                sizeLimit: 2Gi
