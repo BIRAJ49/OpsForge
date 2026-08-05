@@ -1,0 +1,50 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: opsforge-alerts
+  namespace: monitoring
+  labels:
+    release: monitoring
+spec:
+  groups:
+    - name: opsforge.availability
+      rules:
+        - alert: OpsForgeBackendUnavailable
+          expr: |
+            kube_deployment_status_replicas_available{
+              namespace="opsforge-system",
+              deployment="opsforge-backend"
+            } < 1
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: OpsForge backend is unavailable
+            description: No OpsForge backend replica has been available for two minutes.
+
+        - alert: OpsForgeFrontendUnavailable
+          expr: |
+            kube_deployment_status_replicas_available{
+              namespace="opsforge-system",
+              deployment="opsforge-frontend"
+            } < 1
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: OpsForge frontend is unavailable
+            description: No OpsForge frontend replica has been available for two minutes.
+
+        - alert: OpsForgeContainerRestarting
+          expr: |
+            increase(
+              kube_pod_container_status_restarts_total{
+                namespace="opsforge-system"
+              }[15m]
+            ) > 2
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: OpsForge container is repeatedly restarting
+            description: A container restarted more than twice during the last 15 minutes.

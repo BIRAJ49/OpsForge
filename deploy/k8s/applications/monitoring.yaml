@@ -17,7 +17,29 @@ spec:
       releaseName: monitoring
       values: |
         alertmanager:
-          enabled: false
+          enabled: true
+          alertmanagerSpec:
+            alertmanagerConfigSelector:
+              matchLabels:
+                alertmanager-config: opsforge
+            alertmanagerConfigMatcherStrategy:
+              type: None
+            resources:
+              requests:
+                cpu: 50m
+                memory: 128Mi
+              limits:
+                cpu: 300m
+                memory: 512Mi
+            storage:
+              volumeClaimTemplate:
+                spec:
+                  storageClassName: local-path
+                  accessModes:
+                    - ReadWriteOnce
+                  resources:
+                    requests:
+                      storage: 2Gi
 
         grafana:
           enabled: true
