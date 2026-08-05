@@ -1,0 +1,32 @@
+apiVersion: monitoring.coreos.com/v1alpha1
+kind: AlertmanagerConfig
+metadata:
+  name: opsforge-email
+  namespace: monitoring
+  labels:
+    alertmanager-config: opsforge
+spec:
+  route:
+    receiver: email
+    matchers:
+      - name: severity
+        value: warning|critical
+        matchType: =~
+    groupBy:
+      - alertname
+      - namespace
+    groupWait: 30s
+    groupInterval: 5m
+    repeatInterval: 4h
+  receivers:
+    - name: email
+      emailConfigs:
+        - to: terms301@gmail.com
+          from: OpsForge Alerts <alerts@birajadhikari49.com.np>
+          smarthost: smtp.resend.com:587
+          authUsername: resend
+          authPassword:
+            name: alertmanager-resend-smtp
+            key: password
+          requireTLS: true
+          sendResolved: true
