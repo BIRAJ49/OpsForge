@@ -16,7 +16,11 @@ RUN apt-get update \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . .
+RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin opsforge
+
+COPY --chown=opsforge:opsforge . .
+
+USER 10001
 
 EXPOSE 8000
 

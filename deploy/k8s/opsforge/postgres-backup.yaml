@@ -75,13 +75,19 @@ spec:
                   cpu: 500m
                   memory: 512Mi
               securityContext:
+                runAsNonRoot: true
+                runAsUser: 999
+                runAsGroup: 999
                 allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
                 capabilities:
                   drop:
                     - ALL
               volumeMounts:
                 - name: backup
                   mountPath: /backup
+                - name: tmp
+                  mountPath: /tmp
 
           containers:
             - name: upload
@@ -110,6 +116,8 @@ spec:
 
                   echo "Backup uploaded: ${destination}.dump"
               env:
+                - name: HOME
+                  value: /tmp
                 - name: AWS_REGION
                   value: us-east-1
                 - name: BACKUP_BUCKET
@@ -122,15 +130,24 @@ spec:
                   cpu: 500m
                   memory: 512Mi
               securityContext:
+                runAsNonRoot: true
+                runAsUser: 1000
+                runAsGroup: 999
                 allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
                 capabilities:
                   drop:
                     - ALL
               volumeMounts:
                 - name: backup
                   mountPath: /backup
+                - name: tmp
+                  mountPath: /tmp
 
           volumes:
             - name: backup
               emptyDir:
                 sizeLimit: 2Gi
+            - name: tmp
+              emptyDir:
+                sizeLimit: 256Mi
