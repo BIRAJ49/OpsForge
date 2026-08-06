@@ -1,0 +1,65 @@
+name: Infrastructure security
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - infra/terraform/**
+      - deploy/k8s/**
+      - "**/Dockerfile"
+      - .github/workflows/iac-security.yml
+  pull_request:
+    branches:
+      - main
+    paths:
+      - infra/terraform/**
+      - deploy/k8s/**
+      - "**/Dockerfile"
+      - .github/workflows/iac-security.yml
+  schedule:
+    - cron: "45 0 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    name: Scan infrastructure configuration
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Generate infrastructure security report
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: misconfig
+          severity: HIGH,CRITICAL
+          format: sarif
+          output: trivy-iac.sarif
+          exit-code: 0
+
+      - name: Upload infrastructure security report
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: trivy-iac.sarif
+          category: trivy-iac
+
+      - name: Enforce infrastructure security policy
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: misconfig
+          severity: HIGH,CRITICAL
+          format: table
+          exit-code: 1
+          skip-setup-trivy: true
