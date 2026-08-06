@@ -37,7 +37,7 @@ resource "aws_subnet" "public" {
   vpc_id                  = aws_vpc.opsforge.id
   cidr_block              = "10.42.1.0/24"
   availability_zone       = data.aws_availability_zones.available.names[0]
-  map_public_ip_on_launch = true
+  map_public_ip_on_launch = false
 
   tags = {
     Name        = "opsforge-${var.environment}-public"
@@ -73,6 +73,9 @@ resource "aws_route_table_association" "public" {
   route_table_id = aws_route_table.public.id
 }
 
+# This single-node K3s host requires internet egress for image registries,
+# package repositories, certificate issuance, AWS APIs, and external services.
+#trivy:ignore:AVD-AWS-0104
 resource "aws_security_group" "opsforge" {
   name        = "opsforge-${var.environment}"
   description = "Public web access and restricted SSH for the OpsForge K3s node"
