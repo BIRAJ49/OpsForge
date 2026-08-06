@@ -285,6 +285,7 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
+          ssh-key: ${{ secrets.GITOPS_DEPLOY_KEY }}
 
       - name: Install Kustomize
         env:
