@@ -8,7 +8,11 @@ updates:
       day: monday
       time: "06:00"
       timezone: Asia/Kathmandu
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 3
+    groups:
+      frontend-minor-and-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
     commit-message:
       prefix: deps(frontend)
 
@@ -17,9 +21,13 @@ updates:
     schedule:
       interval: weekly
       day: monday
-      time: "06:00"
+      time: "06:15"
       timezone: Asia/Kathmandu
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 3
+    groups:
+      backend-minor-and-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
     commit-message:
       prefix: deps(backend)
 
@@ -28,9 +36,13 @@ updates:
     schedule:
       interval: weekly
       day: monday
-      time: "06:00"
+      time: "06:30"
       timezone: Asia/Kathmandu
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 3
+    groups:
+      frontend-image-minor-and-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
     commit-message:
       prefix: deps(frontend-image)
 
@@ -39,9 +51,13 @@ updates:
     schedule:
       interval: weekly
       day: monday
-      time: "06:00"
+      time: "06:45"
       timezone: Asia/Kathmandu
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 3
+    groups:
+      backend-image-minor-and-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
     commit-message:
       prefix: deps(backend-image)
 
@@ -50,8 +66,12 @@ updates:
     schedule:
       interval: weekly
       day: monday
-      time: "06:00"
+      time: "07:00"
       timezone: Asia/Kathmandu
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 3
+    groups:
+      actions-minor-and-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
     commit-message:
       prefix: deps(actions)
