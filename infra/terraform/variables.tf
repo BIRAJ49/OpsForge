@@ -39,13 +39,16 @@ variable "ssh_allowed_cidr" {
 }
 
 variable "domain_name" {
-  description = "Optional application hostname managed in an existing Route 53 hosted zone."
+  description = "Fully qualified OpsForge hostname managed by Cloudflare."
   type        = string
-  default     = ""
 }
 
-variable "route53_zone_name" {
-  description = "Optional existing Route 53 zone name, for example example.com."
+variable "cloudflare_zone_id" {
+  description = "Cloudflare zone ID containing the OpsForge DNS record."
   type        = string
-  default     = ""
+
+  validation {
+    condition     = length(var.cloudflare_zone_id) == 32
+    error_message = "cloudflare_zone_id must be a 32-character Cloudflare zone ID."
+  }
 }
