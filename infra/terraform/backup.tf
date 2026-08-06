@@ -40,6 +40,9 @@ resource "aws_s3_bucket_versioning" "postgres_backups" {
   }
 }
 
+# SSE-S3 is sufficient for this personal-project backup bucket and avoids the
+# recurring cost and additional key policy surface of a customer-managed KMS key.
+#trivy:ignore:AVD-AWS-0132
 resource "aws_s3_bucket_server_side_encryption_configuration" "postgres_backups" {
   bucket = aws_s3_bucket.postgres_backups.id
 
