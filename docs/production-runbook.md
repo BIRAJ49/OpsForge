@@ -2,7 +2,7 @@
 
 ## Safe Rollout Order
 
-1. Apply Terraform with `enable_ssh_access = true` and confirm Cloudflare Access, DNS, budget, OIDC roles, and the EC2 SSM role.
+1. Apply Terraform with `enable_ssh_access = true`. Keep `enable_admin_access = false` until Cloudflare Access is available; Grafana and Argo CD remain private.
 2. Open an SSM session with the `ssm_start_session_command` Terraform output. Confirm `kubectl get nodes` works.
 3. Back up the Sealed Secrets key before adopting the controller into Argo CD.
 4. Create and validate `OpsForge-GitOps`, then apply `deploy/bootstrap/argocd-root-gitops.yaml` once.
