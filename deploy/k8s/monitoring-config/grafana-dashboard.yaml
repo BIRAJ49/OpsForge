@@ -1,0 +1,28 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: opsforge-overview-dashboard
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  opsforge-overview.json: |-
+    {
+      "annotations": {"list": []},
+      "editable": false,
+      "panels": [
+        {"type":"stat","title":"Backend replicas","id":1,"gridPos":{"h":6,"w":6,"x":0,"y":0},"targets":[{"expr":"kube_deployment_status_replicas_available{namespace=\"opsforge-system\",deployment=\"opsforge-backend\"}","refId":"A"}]},
+        {"type":"stat","title":"Frontend replicas","id":2,"gridPos":{"h":6,"w":6,"x":6,"y":0},"targets":[{"expr":"kube_deployment_status_replicas_available{namespace=\"opsforge-system\",deployment=\"opsforge-frontend\"}","refId":"A"}]},
+        {"type":"timeseries","title":"Container CPU","id":3,"gridPos":{"h":8,"w":12,"x":0,"y":6},"targets":[{"expr":"sum by (pod) (rate(container_cpu_usage_seconds_total{namespace=\"opsforge-system\",container!=\"\"}[5m]))","legendFormat":"{{pod}}","refId":"A"}]},
+        {"type":"timeseries","title":"Container memory","id":4,"gridPos":{"h":8,"w":12,"x":12,"y":6},"targets":[{"expr":"sum by (pod) (container_memory_working_set_bytes{namespace=\"opsforge-system\",container!=\"\"})","legendFormat":"{{pod}}","refId":"A"}]},
+        {"type":"logs","title":"Application logs","id":5,"gridPos":{"h":10,"w":24,"x":0,"y":14},"datasource":{"type":"loki","uid":"loki"},"targets":[{"expr":"{namespace=\"opsforge-system\"}","refId":"A"}]}
+      ],
+      "refresh": "30s",
+      "schemaVersion": 41,
+      "tags": ["opsforge", "production"],
+      "templating": {"list": []},
+      "time": {"from":"now-6h","to":"now"},
+      "title": "OpsForge Production Overview",
+      "uid": "opsforge-production-overview",
+      "version": 1
+    }

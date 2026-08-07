@@ -81,12 +81,16 @@ resource "aws_security_group" "opsforge" {
   description = "Public web access and restricted SSH for the OpsForge K3s node"
   vpc_id      = aws_vpc.opsforge.id
 
-  ingress {
-    description = "SSH from administrator IP"
-    from_port   = 22
-    to_port     = 22
-    protocol    = "tcp"
-    cidr_blocks = [var.ssh_allowed_cidr]
+  dynamic "ingress" {
+    for_each = var.enable_ssh_access ? [1] : []
+
+    content {
+      description = "Temporary SSH from administrator IP; disable after SSM verification"
+      from_port   = 22
+      to_port     = 22
+      protocol    = "tcp"
+      cidr_blocks = [var.ssh_allowed_cidr]
+    }
   }
 
   ingress {
@@ -94,7 +98,7 @@ resource "aws_security_group" "opsforge" {
     from_port   = 80
     to_port     = 80
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+    cidr_blocks = var.cloudflare_ipv4_cidrs
   }
 
   ingress {
@@ -102,7 +106,7 @@ resource "aws_security_group" "opsforge" {
     from_port   = 443
     to_port     = 443
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+    cidr_blocks = var.cloudflare_ipv4_cidrs
   }
 
   egress {
@@ -121,7 +125,7 @@ resource "aws_security_group" "opsforge" {
 
 resource "aws_key_pair" "opsforge" {
   key_name   = "opsforge-${var.environment}"
-  public_key = file(pathexpand(var.ssh_public_key_path))
+  public_key = var.ssh_public_key != null ? var.ssh_public_key : file(pathexpand(var.ssh_public_key_path))
 
   tags = {
     Name        = "opsforge-${var.environment}"

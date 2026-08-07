@@ -1,0 +1,21 @@
+name: External production uptime
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  health:
+    name: Public HTTPS health check
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Verify public endpoint
+        run: |
+          curl --fail --silent --show-error \
+            --retry 2 --retry-delay 10 --max-time 20 \
+            https://opsforge.birajadhikari49.com.np/api/health
