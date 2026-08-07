@@ -34,7 +34,7 @@ Prometheus, Loki, Alertmanager, PostgreSQL, Redis, the Kubernetes API, and inter
 
 Application pull requests run tests, CodeQL, manifest/IaC scanning, and local container builds with vulnerability scanning. A main build publishes immutable GHCR images, CycloneDX SBOMs, and GitHub OIDC-backed attestations. A repository-scoped GitHub App opens a digest promotion PR in `OpsForge-GitOps`; required checks and auto-merge form the promotion gate. Argo CD deploys only merged Git state.
 
-Terraform pull requests use a read-only OIDC role. Main applies use a separate OIDC role and the protected GitHub `production` environment. State is encrypted and locked in private, versioned S3.
+Terraform pull requests use a read-only OIDC role. Production applies are started manually, use a separate OIDC role, and run through the protected GitHub `production` environment. State is encrypted and locked in private, versioned S3.
 
 The OIDC provider and roles have a one-time bootstrap dependency: create them with authenticated local Terraform first. After their ARN outputs are saved as repository variables, all later plans and applies use short-lived OIDC credentials.
 

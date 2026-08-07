@@ -205,6 +205,7 @@ data "aws_iam_policy_document" "terraform_apply" {
       "budgets:ModifyBudget",
       "budgets:TagResource",
       "budgets:UntagResource",
+      "budgets:ListTagsForResource",
     ]
     resources = ["arn:aws:budgets::${data.aws_caller_identity.current.account_id}:budget/OpsForge-*"]
   }
