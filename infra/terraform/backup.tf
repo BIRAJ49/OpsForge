@@ -136,6 +136,11 @@ resource "aws_iam_role_policy_attachment" "postgres_backups" {
   policy_arn = aws_iam_policy.postgres_backups.arn
 }
 
+resource "aws_iam_role_policy_attachment" "ssm" {
+  role       = aws_iam_role.opsforge.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+}
+
 resource "aws_iam_instance_profile" "opsforge" {
   name = "opsforge-${var.environment}-ec2"
   role = aws_iam_role.opsforge.name

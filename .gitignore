@@ -26,6 +26,8 @@ backend/opsforge-dev.db
 *.tfstate.*
 *.tfplan
 tfplan
+tfplan-*
+**/tfplan-*
 *.tfvars
 *.tfvars.json
 crash.log

@@ -26,7 +26,7 @@ export default function Kubernetes() {
 
   useEffect(() => {
     async function loadKubernetes() {
-      const resourceNames = ['pods', 'deployments', 'services', 'ingress', 'configmaps', 'secrets', 'hpa']
+      const resourceNames = ['pods', 'deployments', 'services', 'ingress', 'configmaps', 'hpa']
       try {
         const loaded = await Promise.all(resourceNames.map(async (name) => {
           const result = unwrap(await api.get(`/kubernetes/${name}`))

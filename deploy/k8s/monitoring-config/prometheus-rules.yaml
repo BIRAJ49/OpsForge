@@ -100,3 +100,45 @@ spec:
           annotations:
             summary: OpsForge PostgreSQL backups are suspended
             description: The PostgreSQL backup CronJob has been suspended for five minutes.
+
+    - name: opsforge.infrastructure
+      rules:
+        - alert: OpsForgeNodeNotReady
+          expr: kube_node_status_condition{condition="Ready",status="true"} == 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: OpsForge K3s node is not ready
+            description: The production K3s node has been NotReady for five minutes.
+
+        - alert: OpsForgeNodeDiskPressure
+          expr: kube_node_status_condition{condition="DiskPressure",status="true"} == 1
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: OpsForge node has disk pressure
+            description: Kubelet reports disk pressure on the production node.
+
+        - alert: OpsForgePersistentVolumeFilling
+          expr: |
+            kubelet_volume_stats_available_bytes{namespace=~"opsforge-system|monitoring"}
+            /
+            kubelet_volume_stats_capacity_bytes{namespace=~"opsforge-system|monitoring"}
+            < 0.15
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: OpsForge persistent volume is nearly full
+            description: A production or monitoring PVC has less than 15 percent free space.
+
+        - alert: OpsForgeCertificateExpiring
+          expr: certmanager_certificate_expiration_timestamp_seconds - time() < 1209600
+          for: 1h
+          labels:
+            severity: warning
+          annotations:
+            summary: OpsForge TLS certificate is expiring
+            description: A cert-manager certificate expires in less than 14 days.
