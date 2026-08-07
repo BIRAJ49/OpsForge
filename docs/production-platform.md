@@ -50,7 +50,7 @@ The OIDC provider and roles have a one-time bootstrap dependency: create them wi
 
 Create `BIRAJ49/OpsForge-GitOps` and run `scripts/bootstrap-gitops-repository.sh`. Protect its `main` branch with `Render and scan manifests` required and enable auto-merge.
 
-Create a repository-scoped GitHub App installed only on `OpsForge-GitOps` with Contents and Pull requests read/write. Add `GITOPS_APP_ID` and `GITOPS_APP_PRIVATE_KEY` to the application repository secrets.
+Create a repository-scoped GitHub App installed only on `OpsForge-GitOps` with Contents and Pull requests read/write. Add `GITOPS_APP_CLIENT_ID` and `GITOPS_APP_PRIVATE_KEY` to the application repository secrets, then set the repository variable `ENABLE_GITOPS_PROMOTION=true`.
 
 Create the `production` GitHub environment with required reviewer approval. Add Terraform repository variables listed in `infra/terraform/terraform.tfvars.example`, the two OIDC role ARN variables, and `CLOUDFLARE_API_TOKEN` as an environment secret.
 

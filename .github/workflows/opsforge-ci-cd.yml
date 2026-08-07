@@ -195,7 +195,7 @@ jobs:
 
   promote:
     name: Open GitOps promotion PR
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && vars.ENABLE_GITOPS_PROMOTION == 'true'
     needs: [images, codeql, infrastructure-scan]
     runs-on: ubuntu-latest
     steps:
@@ -203,7 +203,7 @@ jobs:
         id: app-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
         with:
-          app-id: ${{ secrets.GITOPS_APP_ID }}
+          client-id: ${{ secrets.GITOPS_APP_CLIENT_ID }}
           private-key: ${{ secrets.GITOPS_APP_PRIVATE_KEY }}
           owner: BIRAJ49
           repositories: OpsForge-GitOps
