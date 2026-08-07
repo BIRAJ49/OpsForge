@@ -69,11 +69,19 @@ variable "cloudflare_zone_id" {
 variable "cloudflare_account_id" {
   description = "Cloudflare account ID used to manage Zero Trust Access applications."
   type        = string
+  default     = null
+  nullable    = true
 
   validation {
-    condition     = length(var.cloudflare_account_id) == 32
+    condition     = !var.enable_admin_access || (var.cloudflare_account_id != null && length(var.cloudflare_account_id) == 32)
     error_message = "cloudflare_account_id must be a 32-character Cloudflare account ID."
   }
+}
+
+variable "enable_admin_access" {
+  description = "Create Cloudflare Access, DNS, and protected public endpoints for Grafana and Argo CD."
+  type        = bool
+  default     = false
 }
 
 variable "grafana_domain_name" {
@@ -91,11 +99,15 @@ variable "argocd_domain_name" {
 variable "cloudflare_access_email" {
   description = "Owner email allowed through Cloudflare Access."
   type        = string
+  default     = null
+  nullable    = true
 }
 
 variable "cloudflare_github_idp_id" {
   description = "Cloudflare Access GitHub identity-provider ID used for Grafana and Argo CD."
   type        = string
+  default     = null
+  nullable    = true
 }
 
 variable "cloudflare_ipv4_cidrs" {

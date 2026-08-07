@@ -7,12 +7,13 @@ ssh_allowed_cidr    = "203.0.113.10/32"
 
 domain_name        = "opsforge.example.com"
 cloudflare_zone_id = "0123456789abcdef0123456789abcdef"
-cloudflare_account_id  = "0123456789abcdef0123456789abcdef"
-cloudflare_access_email = "owner@example.com"
-budget_alert_email      = "owner@example.com"
+enable_admin_access = false
+budget_alert_email   = "owner@example.com"
 
-# GitHub identity provider configured in Cloudflare Zero Trust.
-cloudflare_github_idp_id = "replace-with-idp-id"
+# Required only after enabling protected Grafana and Argo CD endpoints.
+# cloudflare_account_id       = "0123456789abcdef0123456789abcdef"
+# cloudflare_access_email     = "owner@example.com"
+# cloudflare_github_idp_id    = "replace-with-idp-id"
 
 # Keep true until `aws ssm start-session` succeeds, then set false.
 enable_ssh_access = true

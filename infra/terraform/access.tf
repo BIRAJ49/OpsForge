@@ -12,7 +12,7 @@ locals {
 }
 
 resource "cloudflare_zero_trust_access_application" "admin" {
-  for_each = local.admin_access_applications
+  for_each = var.enable_admin_access ? local.admin_access_applications : {}
 
   account_id                = var.cloudflare_account_id
   name                      = each.value.name

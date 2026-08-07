@@ -11,4 +11,3 @@ resources:
   - applications/loki.yaml
   - applications/alloy.yaml
   - applications/monitoring-config.yaml
-  - applications/platform-access.yaml
