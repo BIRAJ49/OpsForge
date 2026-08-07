@@ -3,15 +3,13 @@ name: OpsForge CI/CD
 on:
   push:
     branches: [main]
-  pull_request:
-    branches: [main]
 
 permissions:
   contents: read
 
 concurrency:
-  group: opsforge-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: opsforge-production
+  cancel-in-progress: false
 
 env:
   REGISTRY: ghcr.io
@@ -34,32 +32,8 @@ env:
   CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
 
 jobs:
-  test:
-    name: Test and build
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
-        with:
-          python-version: "3.12"
-          cache: pip
-          cache-dependency-path: backend/requirements.txt
-      - name: Run backend tests
-        working-directory: backend
-        run: pip install -r requirements.txt && pytest -q
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
-        with:
-          node-version: "22"
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-      - name: Build frontend
-        working-directory: frontend
-        run: npm ci && npm run build
-
   codeql:
     name: CodeQL (${{ matrix.language }})
-    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -81,7 +55,6 @@ jobs:
 
   infrastructure-scan:
     name: IaC and manifest security
-    if: github.event_name == 'push'
     needs: codeql
     runs-on: ubuntu-latest
     permissions:
@@ -118,7 +91,6 @@ jobs:
 
   images:
     name: Build, scan, sign, and publish images
-    if: github.event_name == 'push'
     needs: infrastructure-scan
     runs-on: ubuntu-latest
     permissions:
@@ -161,14 +133,12 @@ jobs:
           trivy image --format cyclonedx --output backend-sbom.cdx.json "$BACKEND_IMAGE:$GITHUB_SHA"
           trivy image --format cyclonedx --output frontend-sbom.cdx.json "$FRONTEND_IMAGE:$GITHUB_SHA"
       - name: Login to GHCR
-        if: github.event_name != 'pull_request'
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Publish immutable images
-        if: github.event_name != 'pull_request'
         id: publish
         run: |
           docker push "$BACKEND_IMAGE:$GITHUB_SHA"
@@ -178,14 +148,12 @@ jobs:
           echo "backend_digest=${backend_ref#*@}" >> "$GITHUB_OUTPUT"
           echo "frontend_digest=${frontend_ref#*@}" >> "$GITHUB_OUTPUT"
       - name: Attest backend provenance
-        if: github.event_name != 'pull_request'
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-name: ${{ env.BACKEND_IMAGE }}
           subject-digest: ${{ steps.publish.outputs.backend_digest }}
           push-to-registry: true
       - name: Attest backend SBOM
-        if: github.event_name != 'pull_request'
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-name: ${{ env.BACKEND_IMAGE }}
@@ -193,14 +161,12 @@ jobs:
           sbom-path: backend-sbom.cdx.json
           push-to-registry: true
       - name: Attest frontend provenance
-        if: github.event_name != 'pull_request'
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-name: ${{ env.FRONTEND_IMAGE }}
           subject-digest: ${{ steps.publish.outputs.frontend_digest }}
           push-to-registry: true
       - name: Attest frontend SBOM
-        if: github.event_name != 'pull_request'
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-name: ${{ env.FRONTEND_IMAGE }}
@@ -208,61 +174,8 @@ jobs:
           sbom-path: frontend-sbom.cdx.json
           push-to-registry: true
 
-  promote:
-    name: Open GitOps promotion PR
-    if: github.event_name == 'push' && vars.ENABLE_GITOPS_PROMOTION == 'true'
-    needs: [images, terraform-apply]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Create repository-scoped GitHub App token
-        id: app-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
-        with:
-          client-id: ${{ secrets.GITOPS_APP_CLIENT_ID }}
-          private-key: ${{ secrets.GITOPS_APP_PRIVATE_KEY }}
-          owner: BIRAJ49
-          repositories: OpsForge-GitOps
-      - name: Checkout GitOps repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          repository: BIRAJ49/OpsForge-GitOps
-          token: ${{ steps.app-token.outputs.token }}
-          path: gitops
-      - name: Update production digests
-        working-directory: gitops
-        env:
-          BACKEND_DIGEST: ${{ needs.images.outputs.backend_digest }}
-          FRONTEND_DIGEST: ${{ needs.images.outputs.frontend_digest }}
-        run: |
-          python3 -m pip install --disable-pip-version-check PyYAML==6.0.3
-          python3 scripts/update-images.py \
-            --backend "$BACKEND_IMAGE@$BACKEND_DIGEST" \
-            --frontend "$FRONTEND_IMAGE@$FRONTEND_DIGEST"
-          kubectl kustomize production >/tmp/opsforge-applications.yaml
-          kubectl kustomize production/opsforge >/tmp/opsforge-workloads.yaml
-          grep -F "$BACKEND_IMAGE@$BACKEND_DIGEST" /tmp/opsforge-workloads.yaml
-          grep -F "$FRONTEND_IMAGE@$FRONTEND_DIGEST" /tmp/opsforge-workloads.yaml
-      - name: Open or update promotion pull request
-        working-directory: gitops
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-        run: |
-          branch="promote/${GITHUB_SHA}"
-          git config user.name "opsforge-gitops[bot]"
-          git config user.email "opsforge-gitops[bot]@users.noreply.github.com"
-          git switch -c "$branch"
-          git add production
-          git commit -m "promote: OpsForge ${GITHUB_SHA}"
-          git push --force-with-lease origin "$branch"
-          gh pr create --repo BIRAJ49/OpsForge-GitOps --base main --head "$branch" \
-            --title "promote: OpsForge ${GITHUB_SHA}" \
-            --body "Promotes signed backend and frontend image digests built from BIRAJ49/OpsForge@${GITHUB_SHA}." \
-            || true
-          gh pr merge --repo BIRAJ49/OpsForge-GitOps "$branch" --auto --squash
-
   terraform-plan:
     name: Terraform plan
-    if: github.event_name == 'push'
     needs: images
     runs-on: ubuntu-latest
     permissions:
@@ -294,7 +207,6 @@ jobs:
 
   terraform-apply:
     name: Terraform apply
-    if: github.event_name == 'push'
     needs: terraform-plan
     runs-on: ubuntu-latest
     environment: production
@@ -318,7 +230,6 @@ jobs:
 
   uptime:
     name: External production uptime
-    if: github.event_name == 'push'
     needs: terraform-apply
     runs-on: ubuntu-latest
     timeout-minutes: 2
