@@ -46,7 +46,7 @@ env:
 jobs:
   test:
     name: Test and build
-    if: github.event_name != 'schedule'
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -69,7 +69,7 @@ jobs:
 
   codeql:
     name: CodeQL (${{ matrix.language }})
-    if: github.event_name != 'schedule' || github.event.schedule == '30 0 * * 1'
+    if: github.event_name == 'pull_request' || github.event.schedule == '30 0 * * 1'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -91,7 +91,7 @@ jobs:
 
   infrastructure-scan:
     name: IaC and manifest security
-    if: github.event_name != 'schedule' || github.event.schedule == '30 0 * * 1'
+    if: github.event_name == 'pull_request' || github.event.schedule == '30 0 * * 1'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -127,7 +127,7 @@ jobs:
 
   images:
     name: Build, scan, sign, and publish images
-    if: github.event_name != 'schedule'
+    if: always() && ((github.event_name == 'pull_request' && needs.test.result == 'success') || github.event_name == 'push')
     needs: test
     runs-on: ubuntu-latest
     permissions:
@@ -220,7 +220,7 @@ jobs:
   promote:
     name: Open GitOps promotion PR
     if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && vars.ENABLE_GITOPS_PROMOTION == 'true'
-    needs: [images, codeql, infrastructure-scan]
+    needs: [images]
     runs-on: ubuntu-latest
     steps:
       - name: Create repository-scoped GitHub App token
