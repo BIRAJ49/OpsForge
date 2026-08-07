@@ -43,6 +43,24 @@ spec:
 
         grafana:
           enabled: true
+          grafana.ini:
+            server:
+              domain: grafana.birajadhikari49.com.np
+              root_url: https://grafana.birajadhikari49.com.np
+              enforce_domain: true
+            security:
+              cookie_secure: true
+              cookie_samesite: strict
+            users:
+              allow_sign_up: false
+            auth.anonymous:
+              enabled: false
+          sidecar:
+            dashboards:
+              enabled: true
+              searchNamespace: ALL
+              label: grafana_dashboard
+              labelValue: "1"
           additionalDataSources:
             - name: Loki
               type: loki

@@ -140,7 +140,6 @@ class KubernetesService:
                 "services": self._services,
                 "ingress": self._ingress,
                 "configmaps": self._configmaps,
-                "secrets": self._secrets,
                 "hpa": self._hpa,
             }
             handler = handlers.get(resource)
@@ -227,20 +226,6 @@ class KubernetesService:
                 "age": self._age(item.metadata.creation_timestamp),
             }
             for item in configmaps
-        ]
-
-    def _secrets(self, namespaces: set[str] | None = None) -> list[dict[str, Any]]:
-        secrets = self._filter_namespace_items(self.core.list_secret_for_all_namespaces().items, namespaces)
-        return [
-            {
-                "name": item.metadata.name,
-                "namespace": item.metadata.namespace,
-                "type": item.type,
-                "keys": sorted((item.data or {}).keys()),
-                "values": "masked",
-                "age": self._age(item.metadata.creation_timestamp),
-            }
-            for item in secrets
         ]
 
     def _hpa(self, namespaces: set[str] | None = None) -> list[dict[str, Any]]:

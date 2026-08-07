@@ -41,11 +41,6 @@ def configmaps(db: Session = Depends(get_db), current_user=Depends(get_current_u
     return success_response("ConfigMaps loaded", kubernetes_service.list_resource("configmaps", namespaces_for_user(db, current_user)))
 
 
-@router.get("/secrets")
-def secrets(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
-    return success_response("Secrets metadata loaded", kubernetes_service.list_resource("secrets", namespaces_for_user(db, current_user)))
-
-
 @router.get("/hpa")
 def hpa(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     return success_response("HPA loaded", kubernetes_service.list_resource("hpa", namespaces_for_user(db, current_user)))

@@ -4,9 +4,11 @@ kind: Kustomization
 resources:
   - applications/cert-manager.yaml
   - applications/cert-manager-config.yaml
+  - applications/sealed-secrets.yaml
   - applications/ingress-nginx.yaml
   - applications/opsforge.yaml
   - applications/monitoring.yaml
   - applications/loki.yaml
   - applications/alloy.yaml
   - applications/monitoring-config.yaml
+  - applications/platform-access.yaml

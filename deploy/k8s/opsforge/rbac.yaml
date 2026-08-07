@@ -10,7 +10,7 @@ metadata:
   name: opsforge-backend
 rules:
   - apiGroups: [""]
-    resources: ["namespaces", "pods", "pods/log", "pods/status", "services", "endpoints", "events", "configmaps", "secrets"]
+    resources: ["namespaces", "pods", "pods/log", "pods/status", "services", "endpoints", "events", "configmaps"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["apps"]
     resources: ["deployments", "deployments/status", "replicasets", "statefulsets"]

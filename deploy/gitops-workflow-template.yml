@@ -1,0 +1,38 @@
+name: Validate GitOps production state
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  attestations: read
+  packages: read
+
+jobs:
+  validate:
+    name: Render and scan manifests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Render production manifests
+        run: |
+          kubectl kustomize production > /tmp/applications.yaml
+          kubectl kustomize production/opsforge > /tmp/workloads.yaml
+      - name: Verify production image provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          awk '/image: ghcr.io\/biraj49\/opsforge-(backend|frontend)@sha256:/ {print $2}' \
+            /tmp/workloads.yaml | sort -u | while read -r image; do
+              gh attestation verify "oci://$image" --repo BIRAJ49/OpsForge
+            done
+      - name: Scan Kubernetes configuration
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          scan-type: config
+          scan-ref: production
+          severity: HIGH,CRITICAL
+          exit-code: 1
