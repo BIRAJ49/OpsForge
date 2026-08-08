@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.permissions import get_current_user, project_for_user, request_meta
 from app.core.response import error_response, success_response
-from app.models.project import AppType, DeploymentType, Environment, Project
+from app.models.project import AppType, DeploymentType, Environment
 from app.models.project_analysis import AnalysisFileSummary, UploadedProject, UploadStatus, UploadType
 from app.schemas.generated_file import GeneratedFileOptionOut, GeneratedFileOut
 from app.schemas.project_analysis import (
@@ -86,7 +86,7 @@ def upload_project(
         upload.error_message = str(exc.detail)
         db.commit()
         return error_response(str(exc.detail), "INVALID_UPLOAD" if exc.status_code < 500 else "ANALYSIS_FAILED", exc.status_code)
-    except Exception as exc:
+    except Exception:
         upload.status = UploadStatus.failed
         upload.error_message = "Analysis failed"
         db.commit()

@@ -1,0 +1,183 @@
+name: Terraform production
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - infra/terraform/**
+      - .github/workflows/terraform.yml
+  push:
+    branches: [main]
+    paths:
+      - infra/terraform/**
+      - .github/workflows/terraform.yml
+  schedule:
+    - cron: "17 2 * * 1"
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Run a production plan or apply
+        required: true
+        default: plan
+        type: choice
+        options:
+          - plan
+          - apply
+      confirmation:
+        description: Type production to authorize an apply
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: terraform-production-${{ github.event.pull_request.number || 'shared' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+
+jobs:
+  validate:
+    name: Terraform validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Reject an invalid apply request
+        if: >-
+          github.event_name == 'workflow_dispatch' &&
+          inputs.operation == 'apply' &&
+          (inputs.confirmation != 'production' ||
+          github.ref != 'refs/heads/main' ||
+          vars.ENABLE_TERRAFORM_APPLY != 'true')
+        run: |
+          echo "Apply requires protected main, ENABLE_TERRAFORM_APPLY=true, and the exact confirmation: production" >&2
+          exit 1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4
+        with:
+          terraform_version: 1.15.8
+          terraform_wrapper: false
+      - name: Format and validate without production credentials
+        run: |
+          terraform -chdir=infra/terraform fmt -check -diff
+          terraform -chdir=infra/terraform init -backend=false -input=false -lockfile=readonly
+          terraform -chdir=infra/terraform validate
+
+  plan:
+    name: Terraform production plan
+    if: >-
+      github.event_name == 'push' ||
+      github.event_name == 'schedule' ||
+      (github.event_name == 'workflow_dispatch' && inputs.operation == 'plan' && github.ref == 'refs/heads/main')
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Configure read-only AWS credentials
+        uses: aws-actions/configure-aws-credentials@cabfdba3510de1431bac9dba27511d97497fc100 # v5
+        with:
+          role-to-assume: ${{ vars.AWS_TERRAFORM_PLAN_ROLE_ARN }}
+          role-session-name: opsforge-terraform-plan
+          aws-region: ${{ vars.AWS_REGION }}
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4
+        with:
+          terraform_version: 1.15.8
+          terraform_wrapper: false
+      - name: Plan production changes
+        id: plan
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          TF_VAR_aws_region: ${{ vars.AWS_REGION }}
+          TF_VAR_domain_name: ${{ vars.OPSFORGE_DOMAIN }}
+          TF_VAR_grafana_domain_name: ${{ vars.GRAFANA_DOMAIN }}
+          TF_VAR_argocd_domain_name: ${{ vars.ARGOCD_DOMAIN }}
+          TF_VAR_cloudflare_zone_id: ${{ vars.CLOUDFLARE_ZONE_ID }}
+          TF_VAR_cloudflare_account_id: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          TF_VAR_cloudflare_access_email: ${{ vars.CLOUDFLARE_ACCESS_EMAIL }}
+          TF_VAR_cloudflare_github_idp_id: ${{ vars.CLOUDFLARE_GITHUB_IDP_ID }}
+          TF_VAR_enable_admin_access: ${{ vars.ENABLE_ADMIN_ACCESS || 'false' }}
+          TF_VAR_ssh_allowed_cidr: ${{ vars.SSH_ALLOWED_CIDR }}
+          TF_VAR_ssh_public_key: ${{ vars.SSH_PUBLIC_KEY }}
+          TF_VAR_budget_alert_email: ${{ vars.BUDGET_ALERT_EMAIL }}
+        run: |
+          terraform -chdir=infra/terraform init -input=false -lockfile=readonly
+          set +e
+          terraform -chdir=infra/terraform plan \
+            -detailed-exitcode -input=false -lock-timeout=5m -no-color -out=tfplan
+          plan_status=$?
+          set -e
+          if [[ "$plan_status" -eq 1 ]]; then
+            exit 1
+          fi
+          if [[ "$plan_status" -eq 2 ]]; then
+            echo "changes=true" >> "$GITHUB_OUTPUT"
+            echo "### Terraform plan: changes detected" >> "$GITHUB_STEP_SUMMARY"
+            if [[ "$GITHUB_EVENT_NAME" == "schedule" ]]; then
+              echo "Scheduled drift check found unapplied changes." >> "$GITHUB_STEP_SUMMARY"
+              exit 2
+            fi
+          else
+            echo "changes=false" >> "$GITHUB_OUTPUT"
+            echo "### Terraform plan: no changes" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  apply:
+    name: Terraform production apply
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      inputs.operation == 'apply' &&
+      inputs.confirmation == 'production' &&
+      github.ref == 'refs/heads/main' &&
+      vars.ENABLE_TERRAFORM_APPLY == 'true'
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Configure production AWS credentials
+        uses: aws-actions/configure-aws-credentials@cabfdba3510de1431bac9dba27511d97497fc100 # v5
+        with:
+          role-to-assume: ${{ vars.AWS_TERRAFORM_APPLY_ROLE_ARN }}
+          role-session-name: opsforge-terraform-apply
+          aws-region: ${{ vars.AWS_REGION }}
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4
+        with:
+          terraform_version: 1.15.8
+          terraform_wrapper: false
+      - name: Plan and apply the approved commit
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          TF_VAR_aws_region: ${{ vars.AWS_REGION }}
+          TF_VAR_domain_name: ${{ vars.OPSFORGE_DOMAIN }}
+          TF_VAR_grafana_domain_name: ${{ vars.GRAFANA_DOMAIN }}
+          TF_VAR_argocd_domain_name: ${{ vars.ARGOCD_DOMAIN }}
+          TF_VAR_cloudflare_zone_id: ${{ vars.CLOUDFLARE_ZONE_ID }}
+          TF_VAR_cloudflare_account_id: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          TF_VAR_cloudflare_access_email: ${{ vars.CLOUDFLARE_ACCESS_EMAIL }}
+          TF_VAR_cloudflare_github_idp_id: ${{ vars.CLOUDFLARE_GITHUB_IDP_ID }}
+          TF_VAR_enable_admin_access: ${{ vars.ENABLE_ADMIN_ACCESS || 'false' }}
+          TF_VAR_ssh_allowed_cidr: ${{ vars.SSH_ALLOWED_CIDR }}
+          TF_VAR_ssh_public_key: ${{ vars.SSH_PUBLIC_KEY }}
+          TF_VAR_budget_alert_email: ${{ vars.BUDGET_ALERT_EMAIL }}
+        run: |
+          terraform -chdir=infra/terraform init -input=false -lockfile=readonly
+          terraform -chdir=infra/terraform plan \
+            -input=false -lock-timeout=5m -no-color -out=tfplan
+          terraform -chdir=infra/terraform apply -auto-approve -input=false tfplan

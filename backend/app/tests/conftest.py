@@ -1,8 +1,12 @@
+# ruff: noqa: E402
+
 import os
 import tempfile
 
-os.environ["DATABASE_URL"] = f"sqlite:///{tempfile.gettempdir()}/opsforge-test.db"
-os.environ["JWT_SECRET_KEY"] = "test-secret"
+_test_database_directory = tempfile.TemporaryDirectory(prefix="opsforge-test-")
+os.environ.setdefault("DATABASE_URL", f"sqlite:///{_test_database_directory.name}/opsforge.db")
+os.environ["APP_ENV"] = "test"
+os.environ["JWT_SECRET_KEY"] = "opsforge-test-secret-at-least-32-bytes"
 os.environ["ADMIN_PASSWORD"] = "admin-password-123"
 
 import pytest

@@ -33,10 +33,7 @@ data "aws_iam_policy_document" "terraform_plan_assume_role" {
     condition {
       test     = "StringEquals"
       variable = "token.actions.githubusercontent.com:sub"
-      values = [
-        "repo:${var.github_repository}:pull_request",
-        "repo:${var.github_repository}:ref:refs/heads/main",
-      ]
+      values   = ["repo:${var.github_repository}:ref:refs/heads/main"]
     }
   }
 }

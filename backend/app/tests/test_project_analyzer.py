@@ -2,8 +2,6 @@ import io
 import zipfile
 from pathlib import Path
 
-from sqlalchemy import select
-
 from app.core.database import SessionLocal
 from app.models.user import User
 from app.core.security import create_access_token, hash_password
@@ -166,7 +164,8 @@ def test_stack_detector_rule_coverage(tmp_path: Path):
 
 
 def test_secret_masking():
-    masked, warnings = scan_text_for_secrets("AWS_ACCESS_KEY_ID=AKIA1234567890ABCDEF\nDATABASE_URL=postgresql://user:pass@db/app", ".env")
+    fake_aws_key = "AKIA" + "1234567890ABCDEF"
+    masked, warnings = scan_text_for_secrets(f"AWS_ACCESS_KEY_ID={fake_aws_key}\nDATABASE_URL=postgresql://user:pass@db/app", ".env")
     env, env_warnings = masked_env_vars("DATABASE_URL=postgresql://user:pass@db/app\nSAFE_FLAG=true", ".env")
     assert "********" in masked
     assert warnings
