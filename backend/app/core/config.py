@@ -100,7 +100,7 @@ class Settings(BaseSettings):
     LOKI_QUERY_TIMEOUT_SECONDS: int = 12
     LOKI_DEFAULT_NAMESPACE: str = "opsforge-system"
 
-    TRIVY_ENABLED: bool = True
+    TRIVY_ENABLED: bool = False
     TRIVY_PATH: str = "trivy"
 
     REDIS_URL: str = "redis://localhost:6379/0"

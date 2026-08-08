@@ -1,0 +1,4 @@
+# Trusted tooling used only by the centralized CI/CD security gate.
+# Regenerate requirements-audit.txt with the command recorded in its header.
+pip
+pip-audit==2.10.1

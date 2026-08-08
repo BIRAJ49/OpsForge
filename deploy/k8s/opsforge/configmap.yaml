@@ -52,6 +52,6 @@ data:
   LOKI_URL: http://loki.monitoring.svc.cluster.local:3100
   LOKI_QUERY_TIMEOUT_SECONDS: "12"
   LOKI_DEFAULT_NAMESPACE: opsforge-system
-  TRIVY_ENABLED: "true"
+  TRIVY_ENABLED: "false"
   TRIVY_PATH: trivy
   EMAIL_PROVIDER: resend
