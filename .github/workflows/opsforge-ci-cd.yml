@@ -384,9 +384,11 @@ jobs:
             "$self_scan_root"
           python - <<'PY'
           import json
+          import os
           from pathlib import Path
 
-          report = json.loads(Path("trivy-toolchain-vulnerabilities.json").read_text())
+          report_path = Path(os.environ["GITHUB_WORKSPACE"]) / "trivy-toolchain-vulnerabilities.json"
+          report = json.loads(report_path.read_text())
           packages = {
               (package.get("Name"), package.get("Version"))
               for result in report.get("Results", [])
@@ -551,9 +553,11 @@ jobs:
             "$self_scan_root"
           python - <<'PY'
           import json
+          import os
           from pathlib import Path
 
-          report = json.loads(Path("age-toolchain-vulnerabilities.json").read_text())
+          report_path = Path(os.environ["GITHUB_WORKSPACE"]) / "age-toolchain-vulnerabilities.json"
+          report = json.loads(report_path.read_text())
           packages = {
               (package.get("Name"), package.get("Version"))
               for result in report.get("Results", [])
@@ -1018,7 +1022,7 @@ jobs:
             local container="$3"
             local body
             for _ in {1..30}; do
-              if body=$(curl --fail --silent \
+              if body=$(curl --noproxy '*' --fail --silent \
                 --connect-timeout 2 --max-time 3 "$url") &&
                 jq -e \
                   '.success == true and .data.status == "healthy"' \
@@ -1042,7 +1046,7 @@ jobs:
             local container="$3"
             local body
             for _ in {1..30}; do
-              if body=$(curl --fail --silent \
+              if body=$(curl --noproxy '*' --fail --silent \
                 --connect-timeout 2 --max-time 3 "$url") &&
                 [[ "$body" == "ok" ]]; then
                 echo "$label passed."
@@ -1055,6 +1059,44 @@ jobs:
               sleep 2
             done
             echo "$label did not pass before timeout." >&2
+            return 1
+          }
+
+          wait_for_container_ipv4() {
+            local container="$1"
+            local address
+            local octet
+            local valid
+            local -a octets
+            for _ in {1..30}; do
+              address=$(docker container inspect "$container" 2>/dev/null |
+                jq -er --arg network "$network_name" \
+                  '.[0].NetworkSettings.Networks[$network].IPAddress |
+                   select(type == "string" and length > 0)' 2>/dev/null || true)
+              IFS=. read -r -a octets <<<"$address"
+              valid=true
+              if (( ${#octets[@]} != 4 )); then
+                valid=false
+              else
+                for octet in "${octets[@]}"; do
+                  if [[ ! "$octet" =~ ^[0-9]{1,3}$ ]] || (( 10#$octet > 255 )); then
+                    valid=false
+                    break
+                  fi
+                done
+              fi
+              if [[ "$valid" == "true" ]] &&
+                (( 10#${octets[0]} != 0 && 10#${octets[0]} != 127 && 10#${octets[0]} < 224 )); then
+                printf '%s\n' "$address"
+                return 0
+              fi
+              if ! container_running "$container"; then
+                echo "$container stopped before Docker assigned its internal IPv4 address." >&2
+                return 1
+              fi
+              sleep 1
+            done
+            echo "Docker did not assign an internal IPv4 address to $container before timeout." >&2
             return 1
           }
 
@@ -1083,6 +1125,15 @@ jobs:
               smoke "$expected_uid" "$expected_gid"
           }
 
+          assert_no_published_ports() {
+            docker container inspect "$1" |
+              jq -e '
+                .[0] |
+                ((.HostConfig.PortBindings // {}) | length == 0) and
+                (all((.NetworkSettings.Ports // {})[]; . == null))
+              ' >/dev/null
+          }
+
           docker load --input release-images/backend-image.tar
           docker load --input release-images/frontend-image.tar
 
@@ -1100,6 +1151,8 @@ jobs:
 
           docker pull --platform linux/amd64 "$POSTGRES_IMAGE"
           docker network create --internal "$network_name"
+          docker network inspect "$network_name" |
+            jq -e '.[0].Internal == true' >/dev/null
 
           docker run --detach \
             --name "$postgres_name" \
@@ -1158,22 +1211,19 @@ jobs:
             "${backend_runtime[@]}" \
             "${backend_environment[@]}" \
             --network-alias backend \
-            --publish 127.0.0.1::8000 \
             "$backend_image_id" \
             uvicorn app.main:app --host 0.0.0.0 --port 8000
 
           assert_hardening "$backend_name" "10001:10001"
           assert_running_identity "$backend_name" 10001 10001
+          assert_no_published_ports "$backend_name"
           docker container inspect "$backend_name" |
             jq -e '.[0].HostConfig.Tmpfs | has("/tmp")' >/dev/null
 
-          backend_port=$(docker container inspect \
-            --format '{{(index (index .NetworkSettings.Ports "8000/tcp") 0).HostPort}}' \
-            "$backend_name")
-          [[ "$backend_port" =~ ^[0-9]+$ ]]
+          backend_ip=$(wait_for_container_ipv4 "$backend_name")
           wait_for_json_health \
             "Backend /api/health" \
-            "http://127.0.0.1:${backend_port}/api/health" \
+            "http://${backend_ip}:8000/api/health" \
             "$backend_name"
 
           docker run --detach \
@@ -1189,29 +1239,26 @@ jobs:
             --security-opt no-new-privileges:true \
             --pids-limit 128 \
             --memory 256m \
-            --publish 127.0.0.1::8080 \
             "$frontend_image_id"
 
           assert_hardening "$frontend_name" "101:101"
           assert_running_identity "$frontend_name" 101 101
+          assert_no_published_ports "$frontend_name"
           docker container inspect "$frontend_name" |
             jq -e '
               .[0].HostConfig.Tmpfs |
               has("/var/cache/nginx") and has("/var/run") and has("/tmp")
             ' >/dev/null
 
-          frontend_port=$(docker container inspect \
-            --format '{{(index (index .NetworkSettings.Ports "8080/tcp") 0).HostPort}}' \
-            "$frontend_name")
-          [[ "$frontend_port" =~ ^[0-9]+$ ]]
+          frontend_ip=$(wait_for_container_ipv4 "$frontend_name")
 
           wait_for_text_health \
             "Frontend /health" \
-            "http://127.0.0.1:${frontend_port}/health" \
+            "http://${frontend_ip}:8080/health" \
             "$frontend_name"
           wait_for_json_health \
             "Frontend-proxied /api/health" \
-            "http://127.0.0.1:${frontend_port}/api/health" \
+            "http://${frontend_ip}:8080/api/health" \
             "$frontend_name"
       - name: Re-verify the approved scanner after exact-image execution
         id: trivy_post_smoke_integrity
