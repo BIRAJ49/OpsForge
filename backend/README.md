@@ -176,7 +176,7 @@ Project analyzer:
 
 ## Project Analyzer Security
 
-The analyzer never executes uploaded code. It does not run `npm install`, `pip install`, `docker build`, or arbitrary project scripts. ZIP uploads are extracted into `UPLOAD_TEMP_DIR`, path traversal entries are rejected, large uploads are rejected by `MAX_UPLOAD_SIZE_MB`, common dependency/build folders are ignored, binary and very large files are skipped, and `.env`, token, key, password, database URL, GitHub token, AWS key, and private key values are masked before analysis data is saved.
+The analyzer never executes uploaded code. It does not run `npm install`, `pip install`, `docker build`, or arbitrary project scripts. ZIP uploads are extracted into `UPLOAD_TEMP_DIR`; path traversal, symlinks, excessive file counts, and excessive path depth/length are rejected. Compressed, uncompressed, and per-file byte limits are enforced, common dependency/build folders are ignored, binary and very large files are skipped, and `.env`, token, key, password, database URL, GitHub token, AWS key, and private key values are masked before analysis data is saved.
 
 GitHub and GHCR:
 
