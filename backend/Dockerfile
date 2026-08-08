@@ -1,26 +1,36 @@
-FROM python:3.12-slim@sha256:229a2c5bfa27522db7815ea81f9bed70af17ccb9de9fc7ad142b1877b5830d36
+FROM python:3.12-alpine@sha256:6d43704baacd1bfbe7c295d7f13079d5d8104ed33568873133f8fc69980419df AS python-dependencies
+
+WORKDIR /build
+
+COPY requirements.txt .
+
+RUN apk add --no-cache build-base cargo \
+    && CARGO_HOME=/tmp/opsforge-cargo pip wheel --no-cache-dir \
+      --wheel-dir /wheels -r requirements.txt \
+    && rm -rf /tmp/opsforge-cargo
+
+FROM python:3.12-alpine@sha256:6d43704baacd1bfbe7c295d7f13079d5d8104ed33568873133f8fc69980419df
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl ca-certificates git gnupg \
-    && curl -fsSL https://aquasecurity.github.io/trivy-repo/deb/public.key | gpg --dearmor -o /usr/share/keyrings/trivy.gpg \
-    && echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb generic main" > /etc/apt/sources.list.d/trivy.list \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends trivy \
-    && rm -rf /var/lib/apt/lists/*
-
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY --from=python-dependencies /wheels /wheels
 
-RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin opsforge
+RUN apk add --no-cache ca-certificates libffi libgcc libstdc++ \
+    && pip install --no-cache-dir --no-index --find-links=/wheels -r requirements.txt \
+    && python -m pip check \
+    && python -c "import bcrypt, cryptography, greenlet, httptools, psycopg2, pydantic_core, uvloop, watchfiles, websockets, yaml" \
+    && rm -rf /wheels
+
+RUN addgroup -S -g 10001 opsforge \
+    && adduser -S -D -H -u 10001 -G opsforge opsforge
 
 COPY --chown=opsforge:opsforge . .
 
-USER 10001
+USER 10001:10001
 
 EXPOSE 8000
 

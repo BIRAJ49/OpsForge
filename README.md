@@ -75,7 +75,7 @@ Each generated file has an isolated preview page with copy and download actions.
 
 ### GitHub Actions CI/CD
 
-OpsForge includes a GitHub Actions pipeline that tests the application, scans the exact release images, publishes them to GHCR with SBOMs and attestations, and opens a reviewed digest-only GitOps promotion pull request.
+OpsForge includes a GitHub Actions pipeline that tests the application, builds each image once, approves the exact image archives through one centralized security gate, publishes only those archives to GHCR with SBOMs and attestations, and opens a reviewed digest-only GitOps promotion pull request.
 
 ![OpsForge GitHub Actions CI/CD deployment](screenshoot/08-github-actions-cd.png)
 
@@ -105,11 +105,15 @@ OpsForge has a GitHub Actions workflow for this repo:
 
 - Runs backend tests
 - Builds the frontend
-- Builds backend and frontend Docker images
-- Pushes images to GitHub Container Registry
+- Builds backend and frontend images once in an unprivileged job
+- Runs dependency, CodeQL, secret, IaC, and container scanning in one fail-closed `Security gate`
+- Passes immutable artifact IDs, SHA-256 checksums, SBOMs, and approval evidence to release
+- Pushes only the scanned image archives to GitHub Container Registry; release never rebuilds
 - Publishes commit-SHA images and promotes immutable digests
 - Generates CycloneDX SBOMs and build attestations
 - Opens a reviewed GitOps promotion pull request
+- Runs production Terraform plans only after the same `Security gate`
+- Applies only an age-encrypted, commit-bound saved plan after protected-environment approval
 
 Workflow file:
 
@@ -124,7 +128,7 @@ ghcr.io/biraj49/opsforge-backend:<commit-sha>
 ghcr.io/biraj49/opsforge-frontend:<commit-sha>
 ```
 
-The application workflow never writes to the cluster. It pushes verified images to GHCR and opens a digest-only pull request in the dedicated GitOps repository. Argo CD reconciles the merged desired state. Terraform validation/planning, explicitly approved infrastructure applies, and external uptime checks run in separate workflows.
+The production workflow never writes application state directly to the cluster. It pushes verified images to GHCR and opens a digest-only pull request in the dedicated GitOps repository; Argo CD reconciles the merged desired state. Credential-free Terraform validation, gated plans, and explicitly approved exact-plan applies are consolidated in this workflow, but apply remains a separate manual protected job rather than an application-release stage. External uptime checks remain in their own operational workflow.
 
 ## GitOps And Kubernetes
 
@@ -151,7 +155,10 @@ OpsForge also has monitoring pages for cluster metrics and workload data.
 
 ## Security Scanning
 
-Trivy is used for image scanning. Results show severity, target, recommendation, and status.
+The GitHub Actions `Security gate` centralizes dependency, CodeQL, workflow,
+secret, IaC, and exact-image scanning before release. It also creates validated
+CycloneDX SBOMs. The production backend does not embed Trivy; its optional
+synchronous scan endpoint is disabled until it can run in an isolated worker.
 
 ## Incident Analysis And Healing
 

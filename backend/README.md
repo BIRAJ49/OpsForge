@@ -21,7 +21,7 @@ http://localhost:8000/api
 - GitHub API and GitHub Container Registry adapters
 - Kubernetes service boundary
 - Argo CD API adapter
-- Trivy CLI security scanning
+- Optional local Trivy CLI security scanning for development
 - Rule-based incident analyzer
 - Rule-based project analyzer and file generator
 - Mock monitoring and logs for local/demo use
@@ -44,7 +44,7 @@ http://localhost:8000/api
 - Mock monitoring and log APIs
 - Incidents and rule-based analysis with optional AI help
 - Manual self-healing action request, approval, and execution tracking
-- Trivy scan endpoint that fails clearly if Trivy is unavailable
+- Optional local Trivy scan endpoint that fails clearly when disabled or unavailable
 - Audit logging for sensitive actions
 - Centralized response and error format
 - ZIP/GitHub project import with secret masking and generated files
@@ -176,7 +176,7 @@ Project analyzer:
 
 ## Project Analyzer Security
 
-The analyzer never executes uploaded code. It does not run `npm install`, `pip install`, `docker build`, or arbitrary project scripts. ZIP uploads are extracted into `UPLOAD_TEMP_DIR`, path traversal entries are rejected, large uploads are rejected by `MAX_UPLOAD_SIZE_MB`, common dependency/build folders are ignored, binary and very large files are skipped, and `.env`, token, key, password, database URL, GitHub token, AWS key, and private key values are masked before analysis data is saved.
+The analyzer never executes uploaded code. It does not run `npm install`, `pip install`, `docker build`, or arbitrary project scripts. ZIP uploads are extracted into `UPLOAD_TEMP_DIR`; path traversal, symlinks, excessive file counts, and excessive path depth/length are rejected. Compressed, uncompressed, and per-file byte limits are enforced, common dependency/build folders are ignored, binary and very large files are skipped, and `.env`, token, key, password, database URL, GitHub token, AWS key, and private key values are masked before analysis data is saved.
 
 GitHub and GHCR:
 
@@ -321,12 +321,23 @@ If `ARGOCD_SERVER` and `ARGOCD_TOKEN` are not configured, Argo CD endpoints retu
 
 ## Trivy Setup
 
-Install Trivy and ensure it is available on `PATH`, or set:
+Production images do not contain a scanner. Release dependency, source, secret,
+IaC, and exact-image scans run in the centralized `Security gate` in GitHub
+Actions, and every publish, attestation, and promotion job depends on that gate.
+This keeps a large security tool and its transitive dependencies out of the
+internet-facing API image.
+
+The synchronous scan endpoint is disabled by default:
 
 ```text
 TRIVY_PATH=/path/to/trivy
-TRIVY_ENABLED=true
+TRIVY_ENABLED=false
 ```
+
+For local development only, install Trivy separately, keep it updated, set
+`TRIVY_ENABLED=true`, and point `TRIVY_PATH` at the executable. Do not enable
+this endpoint in production until scanning has been moved to an isolated,
+least-privilege worker with resource and network limits.
 
 If Trivy is not installed or disabled, scan endpoints return:
 
@@ -380,7 +391,8 @@ curl -X POST http://localhost:8000/api/incidents/1/analyze \
 - Monitoring and logs are mock services.
 - Kubernetes resource endpoints are safe mock/configurable adapters unless kubeconfig support is extended.
 - GitHub, GHCR, and Argo CD integrations return placeholder statuses when secrets are absent.
-- Trivy scans require the local Trivy CLI.
+- Local Trivy scans are optional and require a separately installed CLI;
+  production release scans run in CI/CD.
 - Secret encryption at rest is marked as an extension point; raw secrets are never returned by API responses.
 - Healing execution records actions but does not automatically mutate clusters by default.
 

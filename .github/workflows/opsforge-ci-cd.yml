@@ -1,4 +1,4 @@
-name: OpsForge application CI/CD
+name: OpsForge production CI/CD
 
 on:
   push:
@@ -8,6 +8,20 @@ on:
   schedule:
     - cron: "30 0 * * 1"
   workflow_dispatch:
+    inputs:
+      operation:
+        description: Run CI only, create a production Terraform plan, or request an exact-plan apply
+        required: true
+        default: ci
+        type: choice
+        options:
+          - ci
+          - terraform-plan
+          - terraform-apply
+      confirmation:
+        description: Type production to authorize a Terraform apply request
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -20,6 +34,8 @@ env:
   REGISTRY: ghcr.io
   BACKEND_IMAGE: ghcr.io/biraj49/opsforge-backend
   FRONTEND_IMAGE: ghcr.io/biraj49/opsforge-frontend
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
 
 jobs:
   backend:
@@ -65,9 +81,6 @@ jobs:
       - name: Lint backend
         working-directory: backend
         run: python -m ruff check app alembic
-      - name: Audit production dependencies
-        working-directory: backend
-        run: python -m pip_audit --strict -r requirements.txt
       - name: Verify PostgreSQL migrations
         working-directory: backend
         run: |
@@ -93,9 +106,6 @@ jobs:
       - name: Install locked dependencies
         working-directory: frontend
         run: npm ci
-      - name: Audit production dependencies
-        working-directory: frontend
-        run: npm run audit:ci
       - name: Lint
         working-directory: frontend
         run: npm run lint
@@ -108,6 +118,38 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
+      - name: Validate the requested production operation
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          APPLY_ENABLED: ${{ vars.ENABLE_TERRAFORM_APPLY }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+          PLAN_AGE_RECIPIENT: ${{ vars.TERRAFORM_PLAN_AGE_RECIPIENT }}
+          REQUESTED_OPERATION: ${{ inputs.operation }}
+        run: |
+          case "$REQUESTED_OPERATION" in
+            ci)
+              ;;
+            terraform-plan)
+              if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+                echo "Production Terraform plans must run from protected main." >&2
+                exit 1
+              fi
+              ;;
+            terraform-apply)
+              if [[ "$GITHUB_REF" != "refs/heads/main" || "$CONFIRMATION" != "production" || "$APPLY_ENABLED" != "true" ]]; then
+                echo "Terraform apply requires protected main, ENABLE_TERRAFORM_APPLY=true, and the exact confirmation: production" >&2
+                exit 1
+              fi
+              if [[ ! "$PLAN_AGE_RECIPIENT" =~ ^age1[0-9a-z]{58}$ ]]; then
+                echo "Terraform apply requires a valid age X25519 public recipient in TERRAFORM_PLAN_AGE_RECIPIENT." >&2
+                exit 1
+              fi
+              ;;
+            *)
+              echo "Unsupported workflow operation: $REQUESTED_OPERATION" >&2
+              exit 1
+              ;;
+          esac
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
@@ -117,7 +159,7 @@ jobs:
             --volume "$GITHUB_WORKSPACE:/repo" \
             --workdir /repo \
             docker.io/rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 \
-            -color
+            -color .github/workflows/*.yml deploy/gitops-workflow-template.yml
       - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4
         with:
           terraform_version: 1.15.8
@@ -139,43 +181,629 @@ jobs:
           cp backend/.env.example backend/.env
           docker compose config --quiet
 
-  codeql:
-    name: CodeQL (${{ matrix.language }})
+  build_images:
+    name: Build immutable images
+    needs: [backend, frontend, configuration]
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 30
     permissions:
       contents: read
-      packages: read
-      security-events: write
-    strategy:
-      fail-fast: false
-      matrix:
-        language: [python, javascript-typescript]
+    outputs:
+      artifact_id: ${{ steps.artifact.outputs.artifact-id }}
+      artifact_digest: ${{ steps.artifact.outputs.artifact-digest }}
+      backend_sha256: ${{ steps.hashes.outputs.backend_sha256 }}
+      frontend_sha256: ${{ steps.hashes.outputs.frontend_sha256 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - uses: github/codeql-action/init@24c7eb380a2dc368f2d129e4c65e51d172983a1e # v4
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+      - name: Build each image exactly once
+        run: |
+          mkdir -p release-images
+          backend_cache=()
+          frontend_cache=()
+          if [[ "$GITHUB_EVENT_NAME" != "pull_request" ]]; then
+            backend_cache=(--cache-to "type=gha,mode=max,scope=backend")
+            frontend_cache=(--cache-to "type=gha,mode=max,scope=frontend")
+          fi
+          docker buildx build --pull --platform linux/amd64 --provenance=false \
+            --cache-from type=gha,scope=backend \
+            "${backend_cache[@]}" \
+            --tag "$BACKEND_IMAGE:$GITHUB_SHA" \
+            --output type=docker,dest=release-images/backend-image.tar \
+            ./backend
+          docker buildx build --pull --platform linux/amd64 --provenance=false \
+            --cache-from type=gha,scope=frontend \
+            "${frontend_cache[@]}" \
+            --tag "$FRONTEND_IMAGE:$GITHUB_SHA" \
+            --output type=docker,dest=release-images/frontend-image.tar \
+            ./frontend
+      - name: Record image archive hashes
+        id: hashes
+        run: |
+          cd release-images
+          sha256sum backend-image.tar frontend-image.tar > SHA256SUMS
+          echo "backend_sha256=$(sha256sum backend-image.tar | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+          echo "frontend_sha256=$(sha256sum frontend-image.tar | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+          sha256sum --check SHA256SUMS
+      - name: Upload immutable image archives
+        id: artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          languages: ${{ matrix.language }}
-          build-mode: none
-      - uses: github/codeql-action/analyze@24c7eb380a2dc368f2d129e4c65e51d172983a1e # v4
-        with:
-          category: /language:${{ matrix.language }}
+          name: release-images-${{ github.run_id }}-${{ github.run_attempt }}
+          path: release-images/
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+          overwrite: false
 
-  infrastructure-scan:
-    name: IaC and secret policy
+  security_gate:
+    name: Security gate
+    if: always()
+    needs: [backend, frontend, configuration, build_images]
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 60
     permissions:
       contents: read
-      security-events: write
+      security-events: write # Upload CodeQL and Trivy SARIF from this unprivileged gate.
+    outputs:
+      age_artifact_id: ${{ steps.age_artifact.outputs.artifact-id }}
+      age_artifact_digest: ${{ steps.age_artifact.outputs.artifact-digest }}
+      age_binary_sha256: ${{ steps.age_toolchain.outputs.binary_sha256 }}
+      age_version: ${{ steps.age_toolchain.outputs.version }}
+      evidence_artifact_id: ${{ steps.evidence.outputs.artifact-id }}
+      evidence_artifact_digest: ${{ steps.evidence.outputs.artifact-digest }}
     steps:
+      - name: Require successful quality and build jobs
+        env:
+          BACKEND_RESULT: ${{ needs.backend.result }}
+          FRONTEND_RESULT: ${{ needs.frontend.result }}
+          CONFIGURATION_RESULT: ${{ needs.configuration.result }}
+          BUILD_RESULT: ${{ needs.build_images.result }}
+        run: |
+          for result in "$BACKEND_RESULT" "$FRONTEND_RESULT" "$CONFIGURATION_RESULT" "$BUILD_RESULT"; do
+            if [[ "$result" != "success" ]]; then
+              echo "A required prerequisite did not succeed." >&2
+              exit 1
+            fi
+          done
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - name: Generate SARIF report
-        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+      - name: Set up the pinned Go toolchain for security tools
+        id: trivy_go
+        continue-on-error: true
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26.5"
+          cache: false
+      - name: Initialize CodeQL for both application languages
+        id: codeql_init
+        continue-on-error: true
+        uses: github/codeql-action/init@5595ccaf912efad79be6eef63a5619ff05969be3 # v4
+        with:
+          languages: python,javascript-typescript
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "22"
+      - name: Build and self-scan the pinned Trivy scanner
+        id: trivy_toolchain
+        continue-on-error: true
+        env:
+          GONOSUMDB: ""
+          GONOPROXY: ""
+          GOPRIVATE: ""
+          GOPROXY: https://proxy.golang.org
+          GOSUMDB: sum.golang.org
+          GOTOOLCHAIN: local
+          TRIVY_BINARY_SHA256: bdd4d5427975109a357f06c1f21f49b4b9607ea63c5aa4368e81407372346fb2
+          TRIVY_GO_VERSION: 1.26.5
+          TRIVY_SOURCE_COMMIT: 40c73e5d6166dcc0346a1ab4e94499d1572854e4
+          TRIVY_SOURCE_TREE: 35d71c560d5475f7da2c2ba31eb6dadeb2ded933
+          TRIVY_PATCH_COMMIT: 18c531d6222968e02031f75fceda487654874532
+          TRIVY_PATCH_DIFF_SHA256: fbabb150925746131eb8a13261642aced82ecb91b14c8e9074d3bbdbfb03cd0f
+          TRIVY_PATCH_VERSION: v0.73.0-opsforge.1
+          TRIVY_VERSION: 0.73.0
+          TRIVY_GO_GIT_VERSION: v5.19.2
+          TRIVY_ORAS_VERSION: v2.6.2
+        run: |
+          set -euo pipefail
+
+          [[ "$(go env GOVERSION)" == "go${TRIVY_GO_VERSION}" ]]
+          source_dir=$(mktemp -d "$RUNNER_TEMP/trivy-source.XXXXXX")
+          install_dir="$RUNNER_TEMP/opsforge-trivy-bin"
+          self_scan_root=$(mktemp -d "$RUNNER_TEMP/trivy-self-scan.XXXXXX")
+          trivy_binary="$install_dir/trivy"
+
+          git init --quiet "$source_dir"
+          git -C "$source_dir" remote add origin https://github.com/aquasecurity/trivy.git
+          git -C "$source_dir" fetch --quiet --depth=1 --no-tags origin "$TRIVY_SOURCE_COMMIT"
+          git -C "$source_dir" checkout --quiet --detach FETCH_HEAD
+          [[ "$(git -C "$source_dir" rev-parse HEAD)" == "$TRIVY_SOURCE_COMMIT" ]]
+          [[ "$(git -C "$source_dir" rev-parse 'HEAD^{tree}')" == "$TRIVY_SOURCE_TREE" ]]
+          [[ "$(python -c 'import json, sys; print(json.load(open(sys.argv[1]))["."])' "$source_dir/.release-please-manifest.json")" == "$TRIVY_VERSION" ]]
+
+          cd "$source_dir"
+          go get \
+            "github.com/go-git/go-git/v5@${TRIVY_GO_GIT_VERSION}" \
+            "oras.land/oras-go/v2@${TRIVY_ORAS_VERSION}"
+          go mod verify
+          [[ "$(go list -m -f '{{.Version}}' github.com/go-git/go-git/v5)" == "$TRIVY_GO_GIT_VERSION" ]]
+          [[ "$(go list -m -f '{{.Version}}' oras.land/oras-go/v2)" == "$TRIVY_ORAS_VERSION" ]]
+          git diff --binary "$TRIVY_SOURCE_COMMIT" -- go.mod go.sum > "$GITHUB_WORKSPACE/trivy-toolchain.patch"
+          [[ "$(sha256sum "$GITHUB_WORKSPACE/trivy-toolchain.patch" | cut -d ' ' -f 1)" == "$TRIVY_PATCH_DIFF_SHA256" ]]
+
+          git add go.mod go.sum
+          GIT_AUTHOR_DATE=2026-08-08T00:00:00Z \
+          GIT_COMMITTER_DATE=2026-08-08T00:00:00Z \
+            git -c user.name="OpsForge Release Bot" \
+              -c user.email="release@opsforge.local" \
+              -c commit.gpgsign=false \
+              commit --quiet -m "build(deps): patch Trivy 0.73.0 vulnerability fixes"
+          [[ "$(git rev-parse HEAD)" == "$TRIVY_PATCH_COMMIT" ]]
+          git -c tag.gpgSign=false tag "$TRIVY_PATCH_VERSION"
+          [[ "$(git describe --tags --exact-match HEAD)" == "$TRIVY_PATCH_VERSION" ]]
+          [[ -z "$(git status --porcelain)" ]]
+
+          mkdir -p "$install_dir"
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GOEXPERIMENT=jsonv2 go build \
+            -mod=readonly \
+            -trimpath \
+            -ldflags="-s -w -extldflags '-static' -X github.com/aquasecurity/trivy/pkg/version/app.ver=${TRIVY_PATCH_VERSION#v}" \
+            -o "$trivy_binary" \
+            ./cmd/trivy/
+          chmod 0755 "$trivy_binary"
+          [[ "$(sha256sum "$trivy_binary" | cut -d ' ' -f 1)" == "$TRIVY_BINARY_SHA256" ]]
+
+          go version "$trivy_binary" | grep -F "go${TRIVY_GO_VERSION}"
+          go version -m "$trivy_binary" | tee "$GITHUB_WORKSPACE/trivy-toolchain-build-info.txt"
+          awk -F '\t' -v expected="$TRIVY_PATCH_VERSION" \
+            '$2 == "mod" && $3 == "github.com/aquasecurity/trivy" && $4 == expected { found = 1 } END { exit !found }' \
+            "$GITHUB_WORKSPACE/trivy-toolchain-build-info.txt"
+          awk -F '\t' -v expected="$TRIVY_GO_GIT_VERSION" \
+            '$2 == "dep" && $3 == "github.com/go-git/go-git/v5" && $4 == expected { found = 1 } END { exit !found }' \
+            "$GITHUB_WORKSPACE/trivy-toolchain-build-info.txt"
+          awk -F '\t' -v expected="$TRIVY_ORAS_VERSION" \
+            '$2 == "dep" && $3 == "oras.land/oras-go/v2" && $4 == expected { found = 1 } END { exit !found }' \
+            "$GITHUB_WORKSPACE/trivy-toolchain-build-info.txt"
+          "$trivy_binary" version | tee "$GITHUB_WORKSPACE/trivy-toolchain-version.txt"
+          grep -Fq "Version: ${TRIVY_PATCH_VERSION#v}" "$GITHUB_WORKSPACE/trivy-toolchain-version.txt"
+
+          install -m 0755 "$trivy_binary" "$self_scan_root/trivy"
+          "$trivy_binary" rootfs \
+            --cache-dir "$GITHUB_WORKSPACE/.cache/trivy" \
+            --scanners vuln \
+            --list-all-pkgs \
+            --severity HIGH,CRITICAL \
+            --format json \
+            --output "$GITHUB_WORKSPACE/trivy-toolchain-vulnerabilities.json" \
+            "$self_scan_root"
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          report_path = Path(os.environ["GITHUB_WORKSPACE"]) / "trivy-toolchain-vulnerabilities.json"
+          report = json.loads(report_path.read_text())
+          packages = {
+              (package.get("Name"), package.get("Version"))
+              for result in report.get("Results", [])
+              for package in result.get("Packages") or []
+          }
+          expected = {
+              ("github.com/aquasecurity/trivy", "v0.73.0-opsforge.1"),
+              ("github.com/go-git/go-git/v5", "v5.19.2"),
+              ("oras.land/oras-go/v2", "v2.6.2"),
+          }
+          missing = expected - packages
+          if missing:
+              raise SystemExit(f"Trivy self-scan did not inventory expected modules: {sorted(missing)}")
+
+          blocked = [
+              vulnerability
+              for result in report.get("Results", [])
+              for vulnerability in result.get("Vulnerabilities") or []
+              if vulnerability.get("Severity") in {"HIGH", "CRITICAL"}
+          ]
+          if blocked:
+              for vulnerability in blocked:
+                  print(
+                      "BLOCKED Trivy toolchain: "
+                      f"{vulnerability.get('VulnerabilityID', 'unknown')} "
+                      f"{vulnerability.get('PkgName', 'unknown')} "
+                      f"{vulnerability.get('Severity', 'unknown')}"
+                  )
+              raise SystemExit(f"Blocked {len(blocked)} high/critical Trivy toolchain finding(s)")
+          print("The pinned Trivy toolchain contains no high or critical vulnerabilities.")
+          PY
+          {
+            echo "source_commit=$TRIVY_SOURCE_COMMIT"
+            echo "source_tree=$TRIVY_SOURCE_TREE"
+            echo "patch_commit=$TRIVY_PATCH_COMMIT"
+            echo "patch_sha256=$TRIVY_PATCH_DIFF_SHA256"
+            echo "version=$TRIVY_PATCH_VERSION"
+            echo "go_version=$TRIVY_GO_VERSION"
+            echo "binary_sha256=$TRIVY_BINARY_SHA256"
+          } >> "$GITHUB_OUTPUT"
+          echo "$install_dir" >> "$GITHUB_PATH"
+      - name: Build and self-scan the pinned age encryptor
+        id: age_toolchain
+        continue-on-error: true
+        env:
+          AGE_BINARY_SHA256: ae8d631a3b66db97dc4b31c921afcc0efe83d22b37fa0ed8dfe406361c512f8b
+          AGE_GO_VERSION: 1.26.5
+          AGE_PATCH_COMMIT: a4846cae78218ef337a4d30881e4f0bdbc49ffa5
+          AGE_PATCH_DIFF_SHA256: 0e8a3ee67c62bd3bcac82ea304a2eeef942c8b3926a49e334b888981fc3dfacb
+          AGE_PATCH_TREE: 0ed23e1868ca343dba42000696e199c0ed4a77c9
+          AGE_PATCH_VERSION: v1.3.1-opsforge.1
+          AGE_SOURCE_COMMIT: b8564adb6d58329b8a3e267360ca2b0abc4efe1d
+          AGE_SOURCE_TREE: 8f376cb34b8cab6b80a7e96ed3b346acb29c9f67
+          AGE_X_CRYPTO_VERSION: v0.52.0
+          AGE_X_SYS_VERSION: v0.45.0
+          AGE_X_TERM_VERSION: v0.43.0
+          EXPECTED_TRIVY_BINARY_SHA256: ${{ steps.trivy_toolchain.outputs.binary_sha256 }}
+          GONOSUMDB: ""
+          GONOPROXY: ""
+          GOPRIVATE: ""
+          GOPROXY: https://proxy.golang.org
+          GOSUMDB: sum.golang.org
+          GOTOOLCHAIN: local
+        run: |
+          set -euo pipefail
+
+          [[ "$(go env GOVERSION)" == "go${AGE_GO_VERSION}" ]]
+          source_dir=$(mktemp -d "$RUNNER_TEMP/age-source.XXXXXX")
+          artifact_dir="$RUNNER_TEMP/opsforge-age-artifact"
+          self_scan_root=$(mktemp -d "$RUNNER_TEMP/age-self-scan.XXXXXX")
+          age_binary="$artifact_dir/age"
+
+          git init --quiet "$source_dir"
+          git -C "$source_dir" remote add origin https://github.com/FiloSottile/age.git
+          git -C "$source_dir" fetch --quiet --depth=1 --no-tags origin "$AGE_SOURCE_COMMIT"
+          git -C "$source_dir" checkout --quiet --detach FETCH_HEAD
+          [[ "$(git -C "$source_dir" rev-parse HEAD)" == "$AGE_SOURCE_COMMIT" ]]
+          [[ "$(git -C "$source_dir" rev-parse 'HEAD^{tree}')" == "$AGE_SOURCE_TREE" ]]
+
+          cd "$source_dir"
+          go get "golang.org/x/crypto@${AGE_X_CRYPTO_VERSION}"
+          go mod verify
+          [[ "$(go list -m -f '{{.Version}}' golang.org/x/crypto)" == "$AGE_X_CRYPTO_VERSION" ]]
+          [[ "$(go list -m -f '{{.Version}}' golang.org/x/sys)" == "$AGE_X_SYS_VERSION" ]]
+          [[ "$(go list -m -f '{{.Version}}' golang.org/x/term)" == "$AGE_X_TERM_VERSION" ]]
+          git diff --binary "$AGE_SOURCE_COMMIT" -- go.mod go.sum > "$GITHUB_WORKSPACE/age-toolchain.patch"
+          [[ "$(sha256sum "$GITHUB_WORKSPACE/age-toolchain.patch" | cut -d ' ' -f 1)" == "$AGE_PATCH_DIFF_SHA256" ]]
+
+          git add go.mod go.sum
+          GIT_AUTHOR_DATE=2026-08-08T00:00:00Z \
+          GIT_COMMITTER_DATE=2026-08-08T00:00:00Z \
+            git -c user.name="OpsForge Release Bot" \
+              -c user.email="release@opsforge.local" \
+              -c commit.gpgsign=false \
+              commit --quiet -m "build(deps): patch age 1.3.1 vulnerability fixes"
+          [[ "$(git rev-parse HEAD)" == "$AGE_PATCH_COMMIT" ]]
+          [[ "$(git rev-parse 'HEAD^{tree}')" == "$AGE_PATCH_TREE" ]]
+          git -c tag.gpgSign=false tag "$AGE_PATCH_VERSION"
+          [[ "$(git describe --tags --exact-match HEAD)" == "$AGE_PATCH_VERSION" ]]
+          [[ -z "$(git status --porcelain)" ]]
+
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go test ./...
+
+          mkdir -p "$artifact_dir"
+          roundtrip_dir=$(mktemp -d "$RUNNER_TEMP/age-roundtrip.XXXXXX")
+          age_keygen="$roundtrip_dir/age-keygen"
+          identity="$roundtrip_dir/identity.txt"
+          plaintext="$roundtrip_dir/plaintext.txt"
+          ciphertext="$roundtrip_dir/ciphertext.age"
+          decrypted="$roundtrip_dir/decrypted.txt"
+          cleanup_roundtrip() {
+            rm -f "$age_keygen" "$identity" "$plaintext" "$ciphertext" "$decrypted"
+            rmdir "$roundtrip_dir" 2>/dev/null || true
+          }
+          trap cleanup_roundtrip EXIT
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+            -trimpath \
+            -mod=readonly \
+            -o "$age_binary" \
+            ./cmd/age
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+            -trimpath \
+            -mod=readonly \
+            -o "$age_keygen" \
+            ./cmd/age-keygen
+          chmod 0755 "$age_binary"
+          [[ "$(sha256sum "$age_binary" | cut -d ' ' -f 1)" == "$AGE_BINARY_SHA256" ]]
+
+          go version "$age_binary" | grep -F "go${AGE_GO_VERSION}"
+          go version -m "$age_binary" | tee "$GITHUB_WORKSPACE/age-toolchain-build-info.txt"
+          awk -F '\t' -v expected="$AGE_PATCH_VERSION" \
+            '$2 == "mod" && $3 == "filippo.io/age" && $4 == expected { found = 1 } END { exit !found }' \
+            "$GITHUB_WORKSPACE/age-toolchain-build-info.txt"
+          awk -F '\t' -v expected="$AGE_X_CRYPTO_VERSION" \
+            '$2 == "dep" && $3 == "golang.org/x/crypto" && $4 == expected { found = 1 } END { exit !found }' \
+            "$GITHUB_WORKSPACE/age-toolchain-build-info.txt"
+          awk -F '\t' -v expected="$AGE_X_SYS_VERSION" \
+            '$2 == "dep" && $3 == "golang.org/x/sys" && $4 == expected { found = 1 } END { exit !found }' \
+            "$GITHUB_WORKSPACE/age-toolchain-build-info.txt"
+          awk -F '\t' -v expected="$AGE_X_TERM_VERSION" \
+            '$2 == "dep" && $3 == "golang.org/x/term" && $4 == expected { found = 1 } END { exit !found }' \
+            "$GITHUB_WORKSPACE/age-toolchain-build-info.txt"
+          awk -F '\t' -v expected="vcs.revision=${AGE_PATCH_COMMIT}" \
+            '$2 == "build" && $3 == expected { found = 1 } END { exit !found }' \
+            "$GITHUB_WORKSPACE/age-toolchain-build-info.txt"
+          awk -F '\t' \
+            '$2 == "build" && $3 == "vcs.modified=false" { found = 1 } END { exit !found }' \
+            "$GITHUB_WORKSPACE/age-toolchain-build-info.txt"
+
+          trivy_binary=$(command -v trivy)
+          [[ "$EXPECTED_TRIVY_BINARY_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$(sha256sum "$trivy_binary" | cut -d ' ' -f 1)" == "$EXPECTED_TRIVY_BINARY_SHA256" ]]
+          install -m 0755 "$age_binary" "$self_scan_root/age"
+          install -m 0755 "$age_keygen" "$self_scan_root/age-keygen"
+          trivy rootfs \
+            --cache-dir "$GITHUB_WORKSPACE/.cache/trivy" \
+            --scanners vuln \
+            --list-all-pkgs \
+            --severity HIGH,CRITICAL \
+            --format json \
+            --output "$GITHUB_WORKSPACE/age-toolchain-vulnerabilities.json" \
+            "$self_scan_root"
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          report_path = Path(os.environ["GITHUB_WORKSPACE"]) / "age-toolchain-vulnerabilities.json"
+          report = json.loads(report_path.read_text())
+          packages = {
+              (package.get("Name"), package.get("Version"))
+              for result in report.get("Results", [])
+              for package in result.get("Packages") or []
+          }
+          expected = {
+              ("filippo.io/age", "v1.3.1-opsforge.1"),
+              ("golang.org/x/crypto", "v0.52.0"),
+              ("golang.org/x/sys", "v0.45.0"),
+              ("golang.org/x/term", "v0.43.0"),
+          }
+          missing = expected - packages
+          if missing:
+              raise SystemExit(f"age self-scan did not inventory expected modules: {sorted(missing)}")
+
+          blocked = [
+              vulnerability
+              for result in report.get("Results", [])
+              for vulnerability in result.get("Vulnerabilities") or []
+              if vulnerability.get("Severity") in {"HIGH", "CRITICAL"}
+          ]
+          if blocked:
+              for vulnerability in blocked:
+                  print(
+                      "BLOCKED age toolchain: "
+                      f"{vulnerability.get('VulnerabilityID', 'unknown')} "
+                      f"{vulnerability.get('PkgName', 'unknown')} "
+                      f"{vulnerability.get('Severity', 'unknown')}"
+                  )
+              raise SystemExit(f"Blocked {len(blocked)} high/critical age toolchain finding(s)")
+          print("The pinned age toolchain contains no high or critical vulnerabilities.")
+          PY
+
+          "$age_binary" --version | tee "$GITHUB_WORKSPACE/age-toolchain-version.txt"
+          grep -Fxq "$AGE_PATCH_VERSION" "$GITHUB_WORKSPACE/age-toolchain-version.txt"
+          printf 'OpsForge age toolchain round-trip\n' > "$plaintext"
+          "$age_keygen" -o "$identity"
+          recipient=$("$age_keygen" -y "$identity")
+          [[ "$recipient" =~ ^age1[0-9a-z]{58}$ ]]
+          "$age_binary" --encrypt --recipient "$recipient" --output "$ciphertext" "$plaintext"
+          "$age_binary" --decrypt --identity "$identity" --output "$decrypted" "$ciphertext"
+          cmp "$plaintext" "$decrypted"
+          cleanup_roundtrip
+          trap - EXIT
+          [[ ! -e "$roundtrip_dir" ]]
+
+          cd "$artifact_dir"
+          sha256sum age > SHA256SUMS
+          sha256sum --check --strict SHA256SUMS
+          [[ "$(wc -l < SHA256SUMS)" -eq 1 ]]
+          {
+            echo "source_commit=$AGE_SOURCE_COMMIT"
+            echo "source_tree=$AGE_SOURCE_TREE"
+            echo "patch_commit=$AGE_PATCH_COMMIT"
+            echo "patch_tree=$AGE_PATCH_TREE"
+            echo "patch_sha256=$AGE_PATCH_DIFF_SHA256"
+            echo "version=$AGE_PATCH_VERSION"
+            echo "go_version=$AGE_GO_VERSION"
+            echo "binary_sha256=$AGE_BINARY_SHA256"
+          } >> "$GITHUB_OUTPUT"
+      - name: Install the Python dependency scanner
+        run: |
+          python -m pip install \
+            --disable-pip-version-check \
+            --no-cache-dir \
+            --only-binary=:all: \
+            --require-hashes \
+            -r backend/requirements-audit.txt
+          python -m pip check
+          [[ "$(python -m pip --version)" == pip\ 26.2.1\ * ]]
+          [[ "$(python -m pip_audit --version)" == "pip-audit 2.10.1" ]]
+      - name: Audit the hash-locked dependency-scanner environment
+        id: dependency_scanner_dependencies
+        continue-on-error: true
+        run: python -m pip_audit --strict --no-deps -r backend/requirements-audit.txt
+      - name: Audit the hash-locked GitOps promotion tool
+        id: gitops_tool_dependencies
+        continue-on-error: true
+        run: python -m pip_audit --strict --no-deps -r backend/requirements-gitops.txt
+      - name: Audit backend production dependencies
+        id: backend_dependencies
+        continue-on-error: true
+        run: python -m pip_audit --strict -r backend/requirements.txt
+      - name: Audit frontend production dependencies
+        id: frontend_dependencies
+        continue-on-error: true
+        working-directory: frontend
+        run: |
+          set -euo pipefail
+          audit_report=$(mktemp "$RUNNER_TEMP/frontend-audit.XXXXXX.json")
+          trap 'rm -f "$audit_report"' EXIT
+          set +e
+          npm audit --omit=dev --audit-level=high --json > "$audit_report"
+          audit_status=$?
+          set -e
+          python - "$audit_report" "$audit_status" <<'PY'
+          import json
+          import sys
+          from datetime import date
+          from pathlib import Path
+
+          report = json.loads(Path(sys.argv[1]).read_text())
+          audit_status = int(sys.argv[2])
+          vulnerabilities = report.get("vulnerabilities") or {}
+          waivers = {
+              "GHSA-qwww-vcr4-c8h2": {
+                  "expires": "2026-10-31",
+                  "reason": (
+                      "OpsForge is a client-only SPA and does not use React Router "
+                      "RSC actions; no patched v7 release is available."
+                  ),
+              }
+          }
+
+          def advisories_for(package_name, visited=None):
+              visited = set() if visited is None else visited
+              if package_name in visited:
+                  return []
+              visited.add(package_name)
+              advisories = []
+              for item in (vulnerabilities.get(package_name) or {}).get("via") or []:
+                  if isinstance(item, str):
+                      advisories.extend(advisories_for(item, visited))
+                  elif isinstance(item, dict):
+                      advisories.append(item)
+              return advisories
+
+          unique = {}
+          for package_name in vulnerabilities:
+              for advisory in advisories_for(package_name):
+                  identifier = str(advisory.get("url") or advisory.get("source", "unknown")).rstrip("/").split("/")[-1]
+                  unique[identifier] = advisory
+
+          today = date.today().isoformat()
+          blocked = []
+          for identifier, advisory in unique.items():
+              if str(advisory.get("severity", "")).lower() not in {"high", "critical"}:
+                  continue
+              waiver = waivers.get(identifier)
+              if waiver and today <= waiver["expires"]:
+                  print(
+                      f"WAIVED {identifier} until {waiver['expires']}: "
+                      f"{waiver['reason']}"
+                  )
+                  continue
+              blocked.append((identifier, advisory, waiver))
+
+          if blocked:
+              for identifier, advisory, waiver in blocked:
+                  prefix = "EXPIRED" if waiver else "BLOCKED"
+                  print(
+                      f"{prefix} {identifier}: {advisory.get('title', 'unknown')} "
+                      f"({advisory.get('severity', 'unknown')})",
+                      file=sys.stderr,
+                  )
+              raise SystemExit(1)
+          if audit_status != 0 and not unique:
+              raise SystemExit("npm audit failed without structured advisories")
+          print("No unwaived high or critical production dependency vulnerabilities found.")
+          PY
+      - name: Audit GitHub Actions and Dependabot policy
+        id: workflow_security
+        continue-on-error: true
+        uses: zizmorcore/zizmor-action@3dc1ecc9bcb9e94e9b2c709687979e1298497054 # v0.6.2
+        with:
+          inputs: .github/workflows deploy/gitops-workflow-template.yml .github/dependabot.yml
+          persona: pedantic
+          version: 1.29.0
+          advanced-security: false
+          annotations: true
+      - name: Analyze source with CodeQL
+        id: codeql_analyze
+        continue-on-error: true
+        uses: github/codeql-action/analyze@5595ccaf912efad79be6eef63a5619ff05969be3 # v4
+        with:
+          category: /security-gate
+          output: codeql-results
+          upload: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'never' || 'always' }}
+      - name: Enforce high and critical CodeQL findings
+        id: codeql_policy
+        continue-on-error: true
+        env:
+          CODEQL_SARIF_DIRECTORY: ${{ steps.codeql_analyze.outputs.sarif-output }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["CODEQL_SARIF_DIRECTORY"])
+          files = sorted(root.rglob("*.sarif"))
+          if not files:
+              raise SystemExit("CodeQL produced no SARIF files")
+
+          blocked = []
+          for path in files:
+              document = json.loads(path.read_text())
+              for run in document.get("runs", []):
+                  tool = run.get("tool", {})
+                  driver_rules = tool.get("driver", {}).get("rules", [])
+                  rules_by_id = {rule.get("id"): rule for rule in driver_rules}
+                  for extension in tool.get("extensions", []):
+                      rules_by_id.update(
+                          {rule.get("id"): rule for rule in extension.get("rules", [])}
+                      )
+                  for result in run.get("results", []):
+                      rule = rules_by_id.get(result.get("ruleId"), {})
+                      index = result.get("ruleIndex")
+                      if not rule and isinstance(index, int) and index < len(driver_rules):
+                          rule = driver_rules[index]
+                      properties = rule.get("properties", {})
+                      raw_score = properties.get("security-severity")
+                      try:
+                          score = float(raw_score)
+                      except (TypeError, ValueError):
+                          score = 0.0
+                      level = result.get("level") or rule.get("defaultConfiguration", {}).get("level", "")
+                      if score >= 7.0 or level == "error":
+                          message = result.get("message", {}).get("text", "CodeQL finding")
+                          blocked.append((result.get("ruleId", "unknown"), score, level, message))
+
+          if blocked:
+              for rule_id, score, level, message in blocked:
+                  print(f"BLOCKED {rule_id}: score={score:g} level={level} - {message}")
+              raise SystemExit(f"Blocked {len(blocked)} high/critical CodeQL finding(s)")
+          print("No high or critical CodeQL findings detected.")
+          PY
+      - name: Re-verify the approved scanner before repository and image scans
+        id: trivy_integrity
+        continue-on-error: true
+        env:
+          EXPECTED_TRIVY_BINARY_SHA256: ${{ steps.trivy_toolchain.outputs.binary_sha256 }}
+          EXPECTED_TRIVY_VERSION: ${{ steps.trivy_toolchain.outputs.version }}
+        run: |
+          set -euo pipefail
+          scanner="$RUNNER_TEMP/opsforge-trivy-bin/trivy"
+          [[ "$EXPECTED_TRIVY_BINARY_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$EXPECTED_TRIVY_VERSION" == "v0.73.0-opsforge.1" ]]
+          [[ -x "$scanner" ]]
+          [[ "$(command -v trivy)" == "$scanner" ]]
+          [[ "$(sha256sum "$scanner" | cut -d ' ' -f 1)" == "$EXPECTED_TRIVY_BINARY_SHA256" ]]
+          "$scanner" version | grep -F "Version: ${EXPECTED_TRIVY_VERSION#v}"
+      - name: Generate IaC and secret SARIF
+        id: repository_policy_report
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: fs
           scan-ref: .
@@ -186,15 +814,21 @@ jobs:
           severity: HIGH,CRITICAL
           format: sarif
           output: trivy-policy.sarif
+          limit-severities-for-sarif: true
           exit-code: 0
-      - name: Upload SARIF report
-        if: always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
-        uses: github/codeql-action/upload-sarif@24c7eb380a2dc368f2d129e4c65e51d172983a1e # v4
+          skip-setup-trivy: true
+      - name: Upload IaC and secret SARIF
+        id: repository_policy_upload
+        if: steps.repository_policy_report.outcome == 'success' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3 # v4
         with:
           sarif_file: trivy-policy.sarif
           category: trivy-policy
-      - name: Enforce policy
-        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+      - name: Enforce IaC and secret policy
+        id: repository_policy
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: fs
           scan-ref: .
@@ -206,106 +840,1594 @@ jobs:
           format: table
           exit-code: 1
           skip-setup-trivy: true
+      - name: Download the exact image archives
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.build_images.outputs.artifact_id }}
+          path: release-images
+          digest-mismatch: error
+      - name: Verify image archive integrity
+        env:
+          EXPECTED_BACKEND_SHA256: ${{ needs.build_images.outputs.backend_sha256 }}
+          EXPECTED_FRONTEND_SHA256: ${{ needs.build_images.outputs.frontend_sha256 }}
+        run: |
+          cd release-images
+          sha256sum --check SHA256SUMS
+          [[ "$(sha256sum backend-image.tar | cut -d ' ' -f 1)" == "$EXPECTED_BACKEND_SHA256" ]]
+          [[ "$(sha256sum frontend-image.tar | cut -d ' ' -f 1)" == "$EXPECTED_FRONTEND_SHA256" ]]
+      - name: Scan backend image archive
+        id: backend_image_report
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          input: release-images/backend-image.tar
+          scanners: vuln
+          severity: HIGH,CRITICAL
+          format: json
+          output: backend-vulnerabilities.json
+          exit-code: 0
+          skip-setup-trivy: true
+      - name: Scan frontend image archive
+        id: frontend_image_report
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          input: release-images/frontend-image.tar
+          scanners: vuln
+          severity: HIGH,CRITICAL
+          format: json
+          output: frontend-vulnerabilities.json
+          exit-code: 0
+          skip-setup-trivy: true
+      - name: Convert container reports to SARIF
+        id: container_sarif
+        continue-on-error: true
+        run: |
+          trivy convert --format sarif --severity HIGH,CRITICAL \
+            --output trivy-backend.sarif backend-vulnerabilities.json
+          trivy convert --format sarif --severity HIGH,CRITICAL \
+            --output trivy-frontend.sarif frontend-vulnerabilities.json
+      - name: Upload backend container SARIF
+        id: backend_image_upload
+        if: steps.container_sarif.outcome == 'success' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3 # v4
+        with:
+          sarif_file: trivy-backend.sarif
+          category: trivy-backend
+      - name: Upload frontend container SARIF
+        id: frontend_image_upload
+        if: steps.container_sarif.outcome == 'success' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3 # v4
+        with:
+          sarif_file: trivy-frontend.sarif
+          category: trivy-frontend
+      - name: Enforce container vulnerability policy
+        id: container_policy
+        continue-on-error: true
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
 
-  container-check:
-    name: Container build and scan
-    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
-    needs: [backend, frontend, configuration, codeql, infrastructure-scan]
+          blocked = []
+          for report_name in ("backend-vulnerabilities.json", "frontend-vulnerabilities.json"):
+              report = json.loads(Path(report_name).read_text())
+              for result in report.get("Results", []):
+                  for vulnerability in result.get("Vulnerabilities") or []:
+                      severity = vulnerability.get("Severity", "UNKNOWN")
+                      fixed = bool(vulnerability.get("FixedVersion"))
+                      if severity == "CRITICAL" or (severity == "HIGH" and fixed):
+                          blocked.append(
+                              (
+                                  report_name,
+                                  vulnerability.get("VulnerabilityID", "unknown"),
+                                  vulnerability.get("PkgName", "unknown"),
+                                  severity,
+                                  vulnerability.get("FixedVersion") or "unfixed",
+                              )
+                          )
+
+          if blocked:
+              for report, identifier, package, severity, fixed_version in blocked:
+                  print(f"BLOCKED {report}: {identifier} {package} {severity} fixed={fixed_version}")
+              raise SystemExit(f"Blocked {len(blocked)} container vulnerability finding(s)")
+          print("No critical or fixable high container vulnerabilities detected.")
+          PY
+      - name: Smoke test hardened exact runtime images
+        id: container_smoke
+        continue-on-error: true
+        env:
+          POSTGRES_IMAGE: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+        run: |
+          set -Eeuo pipefail
+
+          suffix="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          network_name="opsforge-smoke-${suffix}"
+          postgres_name="opsforge-smoke-postgres-${suffix}"
+          migration_name="opsforge-smoke-migration-${suffix}"
+          backend_name="opsforge-smoke-backend-${suffix}"
+          frontend_name="opsforge-smoke-frontend-${suffix}"
+          containers=(
+            "$frontend_name"
+            "$backend_name"
+            "$migration_name"
+            "$postgres_name"
+          )
+
+          container_running() {
+            [[ "$(docker container inspect --format '{{.State.Running}}' "$1" 2>/dev/null || true)" == "true" ]]
+          }
+
+          dump_diagnostics() {
+            local marker
+            marker=$(tr -d '-' </proc/sys/kernel/random/uuid)
+            echo "::stop-commands::$marker"
+            for container in "${containers[@]}"; do
+              if docker container inspect "$container" >/dev/null 2>&1; then
+                echo "===== $container state ====="
+                docker container inspect \
+                  --format 'status={{.State.Status}} exit={{.State.ExitCode}} error={{json .State.Error}}{{if .State.Health}} health={{.State.Health.Status}}{{end}}' \
+                  "$container" 2>&1 || true
+                echo "===== $container logs ====="
+                docker container logs --timestamps "$container" 2>&1 || true
+              fi
+            done
+            echo "::$marker::"
+          }
+
+          cleanup() {
+            local result=$?
+            trap - EXIT INT TERM
+            set +e
+            if (( result != 0 )); then
+              dump_diagnostics
+            fi
+            for container in "${containers[@]}"; do
+              docker container rm --force --volumes "$container" >/dev/null 2>&1 || true
+            done
+            docker network rm "$network_name" >/dev/null 2>&1 || true
+            exit "$result"
+          }
+          trap cleanup EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+
+          wait_for_container_health() {
+            local container="$1"
+            local health
+            for _ in {1..45}; do
+              health=$(docker container inspect \
+                --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}' \
+                "$container" 2>/dev/null || true)
+              if [[ "$health" == "healthy" ]]; then
+                return 0
+              fi
+              if ! container_running "$container"; then
+                echo "$container stopped before becoming healthy." >&2
+                return 1
+              fi
+              sleep 2
+            done
+            echo "$container did not become healthy before timeout." >&2
+            return 1
+          }
+
+          wait_for_json_health() {
+            local label="$1"
+            local url="$2"
+            local container="$3"
+            local body
+            for _ in {1..30}; do
+              if body=$(curl --noproxy '*' --fail --silent \
+                --connect-timeout 2 --max-time 3 "$url") &&
+                jq -e \
+                  '.success == true and .data.status == "healthy"' \
+                  <<<"$body" >/dev/null; then
+                echo "$label passed."
+                return 0
+              fi
+              if ! container_running "$container"; then
+                echo "$container stopped while checking $label." >&2
+                return 1
+              fi
+              sleep 2
+            done
+            echo "$label did not pass before timeout." >&2
+            return 1
+          }
+
+          wait_for_text_health() {
+            local label="$1"
+            local url="$2"
+            local container="$3"
+            local body
+            for _ in {1..30}; do
+              if body=$(curl --noproxy '*' --fail --silent \
+                --connect-timeout 2 --max-time 3 "$url") &&
+                [[ "$body" == "ok" ]]; then
+                echo "$label passed."
+                return 0
+              fi
+              if ! container_running "$container"; then
+                echo "$container stopped while checking $label." >&2
+                return 1
+              fi
+              sleep 2
+            done
+            echo "$label did not pass before timeout." >&2
+            return 1
+          }
+
+          wait_for_container_ipv4() {
+            local container="$1"
+            local address
+            local octet
+            local valid
+            local -a octets
+            for _ in {1..30}; do
+              address=$(docker container inspect "$container" 2>/dev/null |
+                jq -er --arg network "$network_name" \
+                  '.[0].NetworkSettings.Networks[$network].IPAddress |
+                   select(type == "string" and length > 0)' 2>/dev/null || true)
+              IFS=. read -r -a octets <<<"$address"
+              valid=true
+              if (( ${#octets[@]} != 4 )); then
+                valid=false
+              else
+                for octet in "${octets[@]}"; do
+                  if [[ ! "$octet" =~ ^[0-9]{1,3}$ ]] || (( 10#$octet > 255 )); then
+                    valid=false
+                    break
+                  fi
+                done
+              fi
+              if [[ "$valid" == "true" ]] &&
+                (( 10#${octets[0]} != 0 && 10#${octets[0]} != 127 && 10#${octets[0]} < 224 )); then
+                printf '%s\n' "$address"
+                return 0
+              fi
+              if ! container_running "$container"; then
+                echo "$container stopped before Docker assigned its internal IPv4 address." >&2
+                return 1
+              fi
+              sleep 1
+            done
+            echo "Docker did not assign an internal IPv4 address to $container before timeout." >&2
+            return 1
+          }
+
+          assert_hardening() {
+            local container="$1"
+            local expected_user="$2"
+            docker container inspect "$container" |
+              jq -e --arg expected_user "$expected_user" '
+                .[0] |
+                (.Config.User == $expected_user) and
+                (.HostConfig.ReadonlyRootfs == true) and
+                (.HostConfig.CapDrop | index("ALL") != null) and
+                (
+                  .HostConfig.SecurityOpt |
+                  any(startswith("no-new-privileges"))
+                )
+              ' >/dev/null
+          }
+
+          assert_running_identity() {
+            local container="$1"
+            local expected_uid="$2"
+            local expected_gid="$3"
+            docker container exec "$container" sh -ec \
+              'test "$(id -u):$(id -g)" = "$1:$2"' \
+              smoke "$expected_uid" "$expected_gid"
+          }
+
+          assert_no_published_ports() {
+            docker container inspect "$1" |
+              jq -e '
+                .[0] |
+                ((.HostConfig.PortBindings // {}) | length == 0) and
+                (all((.NetworkSettings.Ports // {})[]; . == null))
+              ' >/dev/null
+          }
+
+          docker load --input release-images/backend-image.tar
+          docker load --input release-images/frontend-image.tar
+
+          backend_image_id=$(docker image inspect \
+            --format '{{.Id}}' "$BACKEND_IMAGE:$GITHUB_SHA")
+          frontend_image_id=$(docker image inspect \
+            --format '{{.Id}}' "$FRONTEND_IMAGE:$GITHUB_SHA")
+
+          [[ "$backend_image_id" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$frontend_image_id" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' \
+            "$backend_image_id")" == "linux/amd64" ]]
+          [[ "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' \
+            "$frontend_image_id")" == "linux/amd64" ]]
+
+          docker pull --platform linux/amd64 "$POSTGRES_IMAGE"
+          docker network create --internal "$network_name"
+          docker network inspect "$network_name" |
+            jq -e '.[0].Internal == true' >/dev/null
+
+          docker run --detach \
+            --name "$postgres_name" \
+            --network "$network_name" \
+            --network-alias postgres \
+            --pull=never \
+            --pids-limit 256 \
+            --memory 512m \
+            --health-cmd 'pg_isready -U opsforge -d opsforge_smoke' \
+            --health-interval 2s \
+            --health-timeout 2s \
+            --health-retries 30 \
+            --env POSTGRES_DB=opsforge_smoke \
+            --env POSTGRES_USER=opsforge \
+            --env POSTGRES_HOST_AUTH_METHOD=trust \
+            "$POSTGRES_IMAGE"
+
+          wait_for_container_health "$postgres_name"
+
+          backend_runtime=(
+            --network "$network_name"
+            --pull=never
+            --user 10001:10001
+            --read-only
+            --tmpfs "/tmp:rw,noexec,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=1770"
+            --cap-drop ALL
+            --security-opt no-new-privileges:true
+            --pids-limit 256
+            --memory 768m
+          )
+          backend_environment=(
+            --env APP_ENV=production
+            --env APP_DEBUG=false
+            --env DATABASE_URL=postgresql://opsforge@postgres:5432/opsforge_smoke
+            --env JWT_SECRET_KEY=public-ci-smoke-key-not-a-secret
+            --env ADMIN_EMAIL=smoke@example.invalid
+            --env ADMIN_PASSWORD=public-ci-smoke-password-not-a-secret
+            --env EMAIL_PROVIDER=console
+            --env AI_ENABLED=false
+            --env TRIVY_ENABLED=false
+          )
+
+          docker run \
+            --name "$migration_name" \
+            "${backend_runtime[@]}" \
+            "${backend_environment[@]}" \
+            "$backend_image_id" \
+            alembic upgrade head
+
+          assert_hardening "$migration_name" "10001:10001"
+          docker container inspect "$migration_name" |
+            jq -e '.[0].HostConfig.Tmpfs | has("/tmp")' >/dev/null
+
+          docker run --detach \
+            --name "$backend_name" \
+            "${backend_runtime[@]}" \
+            "${backend_environment[@]}" \
+            --network-alias backend \
+            "$backend_image_id" \
+            uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+          assert_hardening "$backend_name" "10001:10001"
+          assert_running_identity "$backend_name" 10001 10001
+          assert_no_published_ports "$backend_name"
+          docker container inspect "$backend_name" |
+            jq -e '.[0].HostConfig.Tmpfs | has("/tmp")' >/dev/null
+
+          backend_ip=$(wait_for_container_ipv4 "$backend_name")
+          wait_for_json_health \
+            "Backend /api/health" \
+            "http://${backend_ip}:8000/api/health" \
+            "$backend_name"
+
+          docker run --detach \
+            --name "$frontend_name" \
+            --network "$network_name" \
+            --pull=never \
+            --user 101:101 \
+            --read-only \
+            --tmpfs /var/cache/nginx:rw,noexec,nosuid,nodev,size=32m,uid=101,gid=101,mode=0750 \
+            --tmpfs /var/run:rw,noexec,nosuid,nodev,size=4m,uid=101,gid=101,mode=0750 \
+            --tmpfs /tmp:rw,noexec,nosuid,nodev,size=16m,uid=101,gid=101,mode=1770 \
+            --cap-drop ALL \
+            --security-opt no-new-privileges:true \
+            --pids-limit 128 \
+            --memory 256m \
+            "$frontend_image_id"
+
+          assert_hardening "$frontend_name" "101:101"
+          assert_running_identity "$frontend_name" 101 101
+          assert_no_published_ports "$frontend_name"
+          docker container inspect "$frontend_name" |
+            jq -e '
+              .[0].HostConfig.Tmpfs |
+              has("/var/cache/nginx") and has("/var/run") and has("/tmp")
+            ' >/dev/null
+
+          frontend_ip=$(wait_for_container_ipv4 "$frontend_name")
+
+          wait_for_text_health \
+            "Frontend /health" \
+            "http://${frontend_ip}:8080/health" \
+            "$frontend_name"
+          wait_for_json_health \
+            "Frontend-proxied /api/health" \
+            "http://${frontend_ip}:8080/api/health" \
+            "$frontend_name"
+      - name: Re-verify the approved scanner after exact-image execution
+        id: trivy_post_smoke_integrity
+        continue-on-error: true
+        env:
+          EXPECTED_TRIVY_BINARY_SHA256: ${{ steps.trivy_toolchain.outputs.binary_sha256 }}
+          EXPECTED_TRIVY_VERSION: ${{ steps.trivy_toolchain.outputs.version }}
+        run: |
+          set -euo pipefail
+          scanner="$RUNNER_TEMP/opsforge-trivy-bin/trivy"
+          [[ "$EXPECTED_TRIVY_BINARY_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$EXPECTED_TRIVY_VERSION" == "v0.73.0-opsforge.1" ]]
+          [[ -x "$scanner" ]]
+          [[ "$(command -v trivy)" == "$scanner" ]]
+          [[ "$(sha256sum "$scanner" | cut -d ' ' -f 1)" == "$EXPECTED_TRIVY_BINARY_SHA256" ]]
+          "$scanner" version | grep -F "Version: ${EXPECTED_TRIVY_VERSION#v}"
+      - name: Generate backend CycloneDX SBOM
+        id: backend_sbom
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          input: release-images/backend-image.tar
+          format: cyclonedx
+          output: backend-sbom.cdx.json
+          skip-setup-trivy: true
+      - name: Generate frontend CycloneDX SBOM
+        id: frontend_sbom
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          input: release-images/frontend-image.tar
+          format: cyclonedx
+          output: frontend-sbom.cdx.json
+          skip-setup-trivy: true
+      - name: Validate generated SBOMs
+        id: validate_sboms
+        continue-on-error: true
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          for name in ("backend-sbom.cdx.json", "frontend-sbom.cdx.json"):
+              document = json.loads(Path(name).read_text())
+              if document.get("bomFormat") != "CycloneDX":
+                  raise SystemExit(f"{name} is not a CycloneDX SBOM")
+              if not document.get("components"):
+                  raise SystemExit(f"{name} contains no components")
+              print(f"Validated {name} with {len(document['components'])} components")
+          PY
+      - name: Enforce centralized security gate
+        id: enforce
+        if: always()
+        env:
+          CODEQL_INIT: ${{ steps.codeql_init.outcome }}
+          TRIVY_GO: ${{ steps.trivy_go.outcome }}
+          TRIVY_TOOLCHAIN: ${{ steps.trivy_toolchain.outcome }}
+          AGE_TOOLCHAIN: ${{ steps.age_toolchain.outcome }}
+          DEPENDENCY_SCANNER_DEPENDENCIES: ${{ steps.dependency_scanner_dependencies.outcome }}
+          GITOPS_TOOL_DEPENDENCIES: ${{ steps.gitops_tool_dependencies.outcome }}
+          BACKEND_DEPENDENCIES: ${{ steps.backend_dependencies.outcome }}
+          FRONTEND_DEPENDENCIES: ${{ steps.frontend_dependencies.outcome }}
+          WORKFLOW_SECURITY: ${{ steps.workflow_security.outcome }}
+          CODEQL_ANALYZE: ${{ steps.codeql_analyze.outcome }}
+          CODEQL_POLICY: ${{ steps.codeql_policy.outcome }}
+          TRIVY_INTEGRITY: ${{ steps.trivy_integrity.outcome }}
+          REPOSITORY_POLICY_REPORT: ${{ steps.repository_policy_report.outcome }}
+          REPOSITORY_POLICY_UPLOAD: ${{ steps.repository_policy_upload.outcome }}
+          REPOSITORY_POLICY: ${{ steps.repository_policy.outcome }}
+          BACKEND_IMAGE_REPORT: ${{ steps.backend_image_report.outcome }}
+          FRONTEND_IMAGE_REPORT: ${{ steps.frontend_image_report.outcome }}
+          CONTAINER_SARIF: ${{ steps.container_sarif.outcome }}
+          BACKEND_IMAGE_UPLOAD: ${{ steps.backend_image_upload.outcome }}
+          FRONTEND_IMAGE_UPLOAD: ${{ steps.frontend_image_upload.outcome }}
+          CONTAINER_POLICY: ${{ steps.container_policy.outcome }}
+          CONTAINER_SMOKE: ${{ steps.container_smoke.outcome }}
+          TRIVY_POST_SMOKE_INTEGRITY: ${{ steps.trivy_post_smoke_integrity.outcome }}
+          BACKEND_SBOM: ${{ steps.backend_sbom.outcome }}
+          FRONTEND_SBOM: ${{ steps.frontend_sbom.outcome }}
+          VALIDATE_SBOMS: ${{ steps.validate_sboms.outcome }}
+          SARIF_REQUIRED: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+        run: |
+          failures=0
+          check_result() {
+            local label="$1"
+            local result="$2"
+            if [[ "$result" == "success" ]]; then
+              echo "- :white_check_mark: $label" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "- :x: $label ($result)" >> "$GITHUB_STEP_SUMMARY"
+              failures=$((failures + 1))
+            fi
+          }
+          echo "### Centralized security gate" >> "$GITHUB_STEP_SUMMARY"
+          check_result "CodeQL initialization" "$CODEQL_INIT"
+          check_result "Pinned Go toolchain setup" "$TRIVY_GO"
+          check_result "Pinned Trivy build and self-scan" "$TRIVY_TOOLCHAIN"
+          check_result "Pinned age build, tests, self-scan, and round-trip" "$AGE_TOOLCHAIN"
+          check_result "Hash-locked dependency-scanner audit" "$DEPENDENCY_SCANNER_DEPENDENCIES"
+          check_result "Hash-locked GitOps promotion-tool audit" "$GITOPS_TOOL_DEPENDENCIES"
+          check_result "Backend dependency audit" "$BACKEND_DEPENDENCIES"
+          check_result "Frontend dependency audit" "$FRONTEND_DEPENDENCIES"
+          check_result "GitHub Actions security audit" "$WORKFLOW_SECURITY"
+          check_result "CodeQL analysis" "$CODEQL_ANALYZE"
+          check_result "CodeQL severity policy" "$CODEQL_POLICY"
+          check_result "Approved scanner integrity before scans" "$TRIVY_INTEGRITY"
+          check_result "IaC and secret report" "$REPOSITORY_POLICY_REPORT"
+          check_result "IaC and secret enforcement" "$REPOSITORY_POLICY"
+          check_result "Backend image scan" "$BACKEND_IMAGE_REPORT"
+          check_result "Frontend image scan" "$FRONTEND_IMAGE_REPORT"
+          check_result "Container SARIF generation" "$CONTAINER_SARIF"
+          check_result "Container vulnerability policy" "$CONTAINER_POLICY"
+          check_result "Hardened exact-image runtime smoke" "$CONTAINER_SMOKE"
+          check_result "Approved scanner integrity after runtime smoke" "$TRIVY_POST_SMOKE_INTEGRITY"
+          check_result "Backend SBOM" "$BACKEND_SBOM"
+          check_result "Frontend SBOM" "$FRONTEND_SBOM"
+          check_result "SBOM validation" "$VALIDATE_SBOMS"
+          if [[ "$SARIF_REQUIRED" == "true" ]]; then
+            check_result "IaC and secret SARIF upload" "$REPOSITORY_POLICY_UPLOAD"
+            check_result "Backend container SARIF upload" "$BACKEND_IMAGE_UPLOAD"
+            check_result "Frontend container SARIF upload" "$FRONTEND_IMAGE_UPLOAD"
+          fi
+          if (( failures > 0 )); then
+            echo "$failures mandatory security control(s) did not succeed." >&2
+            exit 1
+          fi
+      - name: Create approved release evidence
+        env:
+          IMAGE_ARTIFACT_ID: ${{ needs.build_images.outputs.artifact_id }}
+          IMAGE_ARTIFACT_DIGEST: ${{ needs.build_images.outputs.artifact_digest }}
+          BACKEND_SHA256: ${{ needs.build_images.outputs.backend_sha256 }}
+          FRONTEND_SHA256: ${{ needs.build_images.outputs.frontend_sha256 }}
+          AGE_BINARY_SHA256: ${{ steps.age_toolchain.outputs.binary_sha256 }}
+          AGE_GO_VERSION: ${{ steps.age_toolchain.outputs.go_version }}
+          AGE_PATCH_COMMIT: ${{ steps.age_toolchain.outputs.patch_commit }}
+          AGE_PATCH_SHA256: ${{ steps.age_toolchain.outputs.patch_sha256 }}
+          AGE_PATCH_TREE: ${{ steps.age_toolchain.outputs.patch_tree }}
+          AGE_SOURCE_COMMIT: ${{ steps.age_toolchain.outputs.source_commit }}
+          AGE_SOURCE_TREE: ${{ steps.age_toolchain.outputs.source_tree }}
+          AGE_VERSION: ${{ steps.age_toolchain.outputs.version }}
+          TRIVY_BINARY_SHA256: ${{ steps.trivy_toolchain.outputs.binary_sha256 }}
+          TRIVY_GO_VERSION: ${{ steps.trivy_toolchain.outputs.go_version }}
+          TRIVY_PATCH_COMMIT: ${{ steps.trivy_toolchain.outputs.patch_commit }}
+          TRIVY_PATCH_SHA256: ${{ steps.trivy_toolchain.outputs.patch_sha256 }}
+          TRIVY_SOURCE_COMMIT: ${{ steps.trivy_toolchain.outputs.source_commit }}
+          TRIVY_SOURCE_TREE: ${{ steps.trivy_toolchain.outputs.source_tree }}
+          TRIVY_VERSION: ${{ steps.trivy_toolchain.outputs.version }}
+        run: |
+          mkdir -p security-evidence
+          cp \
+            backend-sbom.cdx.json \
+            frontend-sbom.cdx.json \
+            trivy-toolchain-build-info.txt \
+            trivy-toolchain-version.txt \
+            trivy-toolchain-vulnerabilities.json \
+            trivy-toolchain.patch \
+            security-evidence/
+          cp \
+            age-toolchain-build-info.txt \
+            age-toolchain-version.txt \
+            age-toolchain-vulnerabilities.json \
+            age-toolchain.patch \
+            security-evidence/
+          cp "$RUNNER_TEMP/opsforge-age-artifact/SHA256SUMS" \
+            security-evidence/age-toolchain-SHA256SUMS
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          def sha256(path):
+              digest = hashlib.sha256()
+              with Path(path).open("rb") as stream:
+                  for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                      digest.update(chunk)
+              return digest.hexdigest()
+
+          approval = {
+              "schema": 3,
+              "repository": os.environ["GITHUB_REPOSITORY"],
+              "commit": os.environ["GITHUB_SHA"],
+              "run_id": os.environ["GITHUB_RUN_ID"],
+              "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
+              "image_artifact": {
+                  "id": os.environ["IMAGE_ARTIFACT_ID"],
+                  "digest": os.environ["IMAGE_ARTIFACT_DIGEST"],
+              },
+              "images": {
+                  "backend": {"archive_sha256": os.environ["BACKEND_SHA256"]},
+                  "frontend": {"archive_sha256": os.environ["FRONTEND_SHA256"]},
+              },
+              "sboms": {
+                  "backend": {"sha256": sha256("security-evidence/backend-sbom.cdx.json")},
+                  "frontend": {"sha256": sha256("security-evidence/frontend-sbom.cdx.json")},
+              },
+              "scanner": {
+                  "name": "trivy",
+                  "distribution": "temporary OpsForge-maintained derivative",
+                  "owner": "platform",
+                  "review_by": "2026-09-30",
+                  "replacement_condition": "first clean official release",
+                  "vulnerability_waiver": False,
+                  "version": os.environ["TRIVY_VERSION"],
+                  "go_version": os.environ["TRIVY_GO_VERSION"],
+                  "source_commit": os.environ["TRIVY_SOURCE_COMMIT"],
+                  "source_tree": os.environ["TRIVY_SOURCE_TREE"],
+                  "patch_commit": os.environ["TRIVY_PATCH_COMMIT"],
+                  "patch_sha256": os.environ["TRIVY_PATCH_SHA256"],
+                  "binary_sha256": os.environ["TRIVY_BINARY_SHA256"],
+                  "build_info_sha256": sha256(
+                      "security-evidence/trivy-toolchain-build-info.txt"
+                  ),
+                  "version_report_sha256": sha256(
+                      "security-evidence/trivy-toolchain-version.txt"
+                  ),
+                  "self_scan_sha256": sha256(
+                      "security-evidence/trivy-toolchain-vulnerabilities.json"
+                  ),
+              },
+              "encryption_tool": {
+                  "name": "age",
+                  "distribution": "temporary OpsForge-maintained derivative",
+                  "owner": "platform",
+                  "review_by": "2026-09-30",
+                  "replacement_condition": "first clean official release",
+                  "vulnerability_waiver": False,
+                  "version": os.environ["AGE_VERSION"],
+                  "go_version": os.environ["AGE_GO_VERSION"],
+                  "source_commit": os.environ["AGE_SOURCE_COMMIT"],
+                  "source_tree": os.environ["AGE_SOURCE_TREE"],
+                  "patch_commit": os.environ["AGE_PATCH_COMMIT"],
+                  "patch_tree": os.environ["AGE_PATCH_TREE"],
+                  "patch_sha256": os.environ["AGE_PATCH_SHA256"],
+                  "binary_sha256": os.environ["AGE_BINARY_SHA256"],
+                  "build_info_sha256": sha256(
+                      "security-evidence/age-toolchain-build-info.txt"
+                  ),
+                  "version_report_sha256": sha256(
+                      "security-evidence/age-toolchain-version.txt"
+                  ),
+                  "self_scan_sha256": sha256(
+                      "security-evidence/age-toolchain-vulnerabilities.json"
+                  ),
+                  "manifest_sha256": sha256(
+                      "security-evidence/age-toolchain-SHA256SUMS"
+                  ),
+              },
+              "policy": {
+                  "codeql_minimum_security_severity": 7.0,
+                  "containers": "all critical and all fixable high vulnerabilities",
+              },
+          }
+          Path("security-evidence/approval.json").write_text(
+              json.dumps(approval, indent=2, sort_keys=True) + "\n"
+          )
+          PY
+      - name: Upload approved release evidence
+        id: evidence
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: security-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: security-evidence/
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 6
+          overwrite: false
+      - name: Upload the approved age binary for a protected apply request
+        id: age_artifact
+        if: github.event_name == 'workflow_dispatch' && inputs.operation == 'terraform-apply'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: approved-age-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/opsforge-age-artifact/age
+            ${{ runner.temp }}/opsforge-age-artifact/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+          overwrite: false
+
+  terraform_plan:
+    name: Terraform production plan
+    if: >-
+      needs.security_gate.result == 'success' &&
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' ||
+      github.event_name == 'schedule' ||
+      (github.event_name == 'workflow_dispatch' &&
+      (inputs.operation == 'terraform-plan' ||
+      (inputs.operation == 'terraform-apply' &&
+      needs.security_gate.outputs.age_artifact_id != '' &&
+      needs.security_gate.outputs.age_artifact_digest != '' &&
+      needs.security_gate.outputs.age_binary_sha256 != '' &&
+      needs.security_gate.outputs.age_version == 'v1.3.1-opsforge.1'))))
+    needs: security_gate
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    concurrency:
+      group: terraform-production
+      cancel-in-progress: false
+    permissions:
+      actions: read # Resolve the immutable centrally approved age artifact.
+      contents: read
+      id-token: write # Exchange GitHub OIDC identity for the read-only AWS plan role.
+    outputs:
+      artifact_id: ${{ steps.plan_artifact.outputs.artifact-id }}
+      artifact_digest: ${{ steps.plan_artifact.outputs.artifact-digest }}
+      changes: ${{ steps.plan.outputs.changes }}
+      ciphertext_sha256: ${{ steps.encrypt_plan.outputs.ciphertext_sha256 }}
+      plan_sha256: ${{ steps.plan_evidence.outputs.plan_sha256 }}
+      recipient_sha256: ${{ steps.encrypt_plan.outputs.recipient_sha256 }}
+      summary_sha256: ${{ steps.plan_evidence.outputs.summary_sha256 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
-      - name: Build images without publishing
+      - name: Verify the trusted production revision
         run: |
-          docker buildx build --load --platform linux/amd64 \
-            --cache-from type=gha,scope=backend \
-            --tag "$BACKEND_IMAGE:$GITHUB_SHA" ./backend
-          docker buildx build --load --platform linux/amd64 \
-            --cache-from type=gha,scope=frontend \
-            --tag "$FRONTEND_IMAGE:$GITHUB_SHA" ./frontend
-      - name: Scan backend image
-        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
-        with:
-          image-ref: ${{ env.BACKEND_IMAGE }}:${{ github.sha }}
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
-          exit-code: 1
-          scanners: vuln
-      - name: Scan frontend image
-        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
-        with:
-          image-ref: ${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
-          exit-code: 1
-          scanners: vuln
-          skip-setup-trivy: true
+          [[ "$GITHUB_REF" == "refs/heads/main" ]]
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+          [[ -z "$(git status --porcelain)" ]]
+      - name: Verify the centrally approved age artifact metadata
+        if: github.event_name == 'workflow_dispatch' && inputs.operation == 'terraform-apply'
+        env:
+          EXPECTED_AGE_ARTIFACT_DIGEST: ${{ needs.security_gate.outputs.age_artifact_digest }}
+          EXPECTED_AGE_ARTIFACT_ID: ${{ needs.security_gate.outputs.age_artifact_id }}
+          EXPECTED_AGE_BINARY_SHA256: ${{ needs.security_gate.outputs.age_binary_sha256 }}
+          EXPECTED_AGE_VERSION: ${{ needs.security_gate.outputs.age_version }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [[ "$EXPECTED_AGE_ARTIFACT_ID" =~ ^[0-9]+$ ]]
+          [[ "$EXPECTED_AGE_ARTIFACT_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$EXPECTED_AGE_BINARY_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$EXPECTED_AGE_VERSION" == "v1.3.1-opsforge.1" ]]
+          artifact_json=$(mktemp "$RUNNER_TEMP/age-artifact.XXXXXX.json")
+          trap 'rm -f "$artifact_json"' EXIT
+          gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$EXPECTED_AGE_ARTIFACT_ID" > "$artifact_json"
+          python - "$artifact_json" <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import Path
 
-  images:
-    name: Publish and attest images
-    if: github.event_name == 'push'
-    needs: [backend, frontend, configuration, codeql, infrastructure-scan]
+          artifact = json.loads(Path(sys.argv[1]).read_text())
+          expected_name = f"approved-age-{os.environ['GITHUB_RUN_ID']}-{os.environ['GITHUB_RUN_ATTEMPT']}"
+          workflow_run = artifact.get("workflow_run") or {}
+          expected = {
+              "id": os.environ["EXPECTED_AGE_ARTIFACT_ID"],
+              "digest": os.environ["EXPECTED_AGE_ARTIFACT_DIGEST"],
+              "name": expected_name,
+          }
+          for field, value in expected.items():
+              if str(artifact.get(field)) != value:
+                  raise SystemExit(f"age artifact {field} does not match this security gate")
+          if artifact.get("expired") is not False:
+              raise SystemExit("The centrally approved age artifact is expired")
+          if str(workflow_run.get("id")) != os.environ["GITHUB_RUN_ID"]:
+              raise SystemExit("The age artifact belongs to a different workflow run")
+          if workflow_run.get("head_sha") != os.environ["GITHUB_SHA"]:
+              raise SystemExit("The age artifact belongs to a different commit")
+          if workflow_run.get("head_branch") != "main":
+              raise SystemExit("The age artifact was not built from main")
+          PY
+      - name: Download the centrally approved age encryptor
+        if: github.event_name == 'workflow_dispatch' && inputs.operation == 'terraform-apply'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.security_gate.outputs.age_artifact_id }}
+          path: ${{ runner.temp }}/opsforge-approved-age
+          digest-mismatch: error
+      - name: Verify and install the centrally approved age encryptor
+        if: github.event_name == 'workflow_dispatch' && inputs.operation == 'terraform-apply'
+        env:
+          EXPECTED_AGE_BINARY_SHA256: ${{ needs.security_gate.outputs.age_binary_sha256 }}
+          EXPECTED_AGE_VERSION: ${{ needs.security_gate.outputs.age_version }}
+        run: |
+          set -euo pipefail
+          download_dir="$RUNNER_TEMP/opsforge-approved-age"
+          install_dir="$RUNNER_TEMP/opsforge-age-bin"
+          build_info=$(mktemp "$RUNNER_TEMP/age-consumer-build-info.XXXXXX")
+          trap 'rm -f "$build_info"' EXIT
+          mapfile -t entries < <(find "$download_dir" -mindepth 1 -maxdepth 1 -printf '%f\n' | LC_ALL=C sort)
+          [[ "${#entries[@]}" -eq 2 ]]
+          [[ "${entries[0]}" == "SHA256SUMS" && "${entries[1]}" == "age" ]]
+          [[ "$(wc -l < "$download_dir/SHA256SUMS")" -eq 1 ]]
+          (
+            cd "$download_dir"
+            sha256sum --check --strict SHA256SUMS
+          )
+          actual_sha256=$(sha256sum "$download_dir/age" | cut -d ' ' -f 1)
+          [[ "$EXPECTED_AGE_BINARY_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$actual_sha256" == "$EXPECTED_AGE_BINARY_SHA256" ]]
+          go version "$download_dir/age" | grep -F "go1.26.5"
+          go version -m "$download_dir/age" > "$build_info"
+          awk -F '\t' '$2 == "mod" && $3 == "filippo.io/age" && $4 == "v1.3.1-opsforge.1" { found = 1 } END { exit !found }' "$build_info"
+          awk -F '\t' '$2 == "dep" && $3 == "golang.org/x/crypto" && $4 == "v0.52.0" { found = 1 } END { exit !found }' "$build_info"
+          awk -F '\t' '$2 == "dep" && $3 == "golang.org/x/sys" && $4 == "v0.45.0" { found = 1 } END { exit !found }' "$build_info"
+          awk -F '\t' '$2 == "dep" && $3 == "golang.org/x/term" && $4 == "v0.43.0" { found = 1 } END { exit !found }' "$build_info"
+          awk -F '\t' '$2 == "build" && $3 == "vcs.revision=a4846cae78218ef337a4d30881e4f0bdbc49ffa5" { found = 1 } END { exit !found }' "$build_info"
+          awk -F '\t' '$2 == "build" && $3 == "vcs.modified=false" { found = 1 } END { exit !found }' "$build_info"
+          mkdir -p "$install_dir"
+          install -m 0755 "$download_dir/age" "$install_dir/age"
+          [[ "$("$install_dir/age" --version)" == "$EXPECTED_AGE_VERSION" ]]
+          echo "$install_dir" >> "$GITHUB_PATH"
+      - name: Configure read-only AWS credentials
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        with:
+          role-to-assume: ${{ vars.AWS_TERRAFORM_PLAN_ROLE_ARN }}
+          role-session-name: opsforge-terraform-plan-${{ github.run_id }}
+          aws-region: ${{ vars.AWS_REGION }}
+          mask-aws-account-id: true
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4
+        with:
+          terraform_version: 1.15.8
+          terraform_wrapper: false
+      - name: Initialize the production backend
+        run: terraform -chdir=infra/terraform init -input=false -lockfile=readonly
+      - name: Create the production plan without logging sensitive values
+        id: plan
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          TF_VAR_aws_region: ${{ vars.AWS_REGION }}
+          TF_VAR_domain_name: ${{ vars.OPSFORGE_DOMAIN }}
+          TF_VAR_grafana_domain_name: ${{ vars.GRAFANA_DOMAIN }}
+          TF_VAR_argocd_domain_name: ${{ vars.ARGOCD_DOMAIN }}
+          TF_VAR_cloudflare_zone_id: ${{ vars.CLOUDFLARE_ZONE_ID }}
+          TF_VAR_cloudflare_account_id: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          TF_VAR_cloudflare_access_email: ${{ vars.CLOUDFLARE_ACCESS_EMAIL }}
+          TF_VAR_cloudflare_github_idp_id: ${{ vars.CLOUDFLARE_GITHUB_IDP_ID }}
+          TF_VAR_enable_admin_access: ${{ vars.ENABLE_ADMIN_ACCESS || 'false' }}
+          TF_VAR_ssh_allowed_cidr: ${{ vars.SSH_ALLOWED_CIDR }}
+          TF_VAR_ssh_public_key: ${{ vars.SSH_PUBLIC_KEY }}
+          TF_VAR_budget_alert_email: ${{ vars.BUDGET_ALERT_EMAIL }}
+        run: |
+          mkdir -p terraform-plan
+          plan_log=$(mktemp "$RUNNER_TEMP/terraform-plan.XXXXXX.log")
+          trap 'rm -f "$plan_log"' EXIT
+          set +e
+          terraform -chdir=infra/terraform plan \
+            -detailed-exitcode \
+            -input=false \
+            -lock-timeout=5m \
+            -no-color \
+            -out="$GITHUB_WORKSPACE/terraform-plan/tfplan" \
+            >"$plan_log" 2>&1
+          plan_status=$?
+          set -e
+          case "$plan_status" in
+            0)
+              echo "changes=false" >> "$GITHUB_OUTPUT"
+              ;;
+            2)
+              echo "changes=true" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "Terraform could not create a production plan; its potentially sensitive output was not printed." >&2
+              exit 1
+              ;;
+          esac
+      - name: Create a redacted plan summary and integrity manifest
+        id: plan_evidence
+        env:
+          AGE_ARTIFACT_DIGEST: ${{ needs.security_gate.outputs.age_artifact_digest }}
+          AGE_ARTIFACT_ID: ${{ needs.security_gate.outputs.age_artifact_id }}
+          AGE_BINARY_SHA256: ${{ needs.security_gate.outputs.age_binary_sha256 }}
+          AGE_VERSION: ${{ needs.security_gate.outputs.age_version }}
+          PLAN_HAS_CHANGES: ${{ steps.plan.outputs.changes }}
+          TERRAFORM_VERSION: 1.15.8
+        run: |
+          plan_json=$(mktemp "$RUNNER_TEMP/terraform-plan.XXXXXX.json")
+          trap 'rm -f "$plan_json"' EXIT
+          terraform -chdir=infra/terraform show \
+            -json "$GITHUB_WORKSPACE/terraform-plan/tfplan" \
+            >"$plan_json"
+          python - "$plan_json" <<'PY'
+          import hashlib
+          import json
+          import os
+          import sys
+          from collections import Counter
+          from pathlib import Path
+
+          evidence_dir = Path("terraform-plan")
+          plan_path = evidence_dir / "tfplan"
+
+          def sha256(path):
+              digest = hashlib.sha256()
+              with Path(path).open("rb") as stream:
+                  for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                      digest.update(chunk)
+              return digest.hexdigest()
+
+          with Path(sys.argv[1]).open() as stream:
+              rendered_plan = json.load(stream)
+
+          changes = []
+          action_counts = Counter()
+          for resource in rendered_plan.get("resource_changes", []):
+              actions = [str(action) for action in resource.get("change", {}).get("actions", [])]
+              if not actions or actions == ["no-op"]:
+                  continue
+              address = str(resource.get("address", ""))
+              if not address:
+                  raise SystemExit("Terraform returned a resource change without an address")
+              changes.append({"address": address, "actions": actions})
+              action_counts["/".join(actions)] += 1
+
+          changes.sort(key=lambda item: (item["address"], item["actions"]))
+          if len(changes) > 1000:
+              raise SystemExit("Refusing to truncate a Terraform plan with more than 1000 changed addresses")
+
+          plan_hash = sha256(plan_path)
+          summary = {
+              "schema": 1,
+              "has_changes": os.environ["PLAN_HAS_CHANGES"] == "true",
+              "plan_sha256": plan_hash,
+              "action_counts": dict(sorted(action_counts.items())),
+              "resource_changes": changes,
+          }
+          summary_path = evidence_dir / "summary.json"
+          summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
+          summary_hash = sha256(summary_path)
+
+          manifest = {
+              "schema": 2,
+              "repository": os.environ["GITHUB_REPOSITORY"],
+              "commit": os.environ["GITHUB_SHA"],
+              "ref": os.environ["GITHUB_REF"],
+              "event": os.environ["GITHUB_EVENT_NAME"],
+              "run_id": os.environ["GITHUB_RUN_ID"],
+              "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
+              "workflow_ref": os.environ["GITHUB_WORKFLOW_REF"],
+              "terraform_version": os.environ["TERRAFORM_VERSION"],
+              "platform": "linux_amd64",
+              "plan_sha256": plan_hash,
+              "summary_sha256": summary_hash,
+          }
+          encryption_tool = None
+          if os.environ["AGE_ARTIFACT_ID"]:
+              encryption_tool = {
+                  "name": "age",
+                  "version": os.environ["AGE_VERSION"],
+                  "artifact_id": os.environ["AGE_ARTIFACT_ID"],
+                  "artifact_digest": os.environ["AGE_ARTIFACT_DIGEST"],
+                  "binary_sha256": os.environ["AGE_BINARY_SHA256"],
+              }
+              if not encryption_tool["artifact_id"].isdigit():
+                  raise SystemExit("The age artifact ID is invalid")
+              if not encryption_tool["artifact_digest"].startswith("sha256:") or len(encryption_tool["artifact_digest"]) != 71:
+                  raise SystemExit("The age artifact service digest is invalid")
+              if len(encryption_tool["binary_sha256"]) != 64:
+                  raise SystemExit("The age binary SHA-256 is invalid")
+              if encryption_tool["version"] != "v1.3.1-opsforge.1":
+                  raise SystemExit("The age derivative version is invalid")
+              manifest["encryption_tool"] = encryption_tool
+          (evidence_dir / "manifest.json").write_text(
+              json.dumps(manifest, indent=2, sort_keys=True) + "\n"
+          )
+
+          def markdown(value):
+              return str(value).replace("\\", "\\\\").replace("|", "\\|").replace("\n", " ")
+
+          with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a") as stream:
+              stream.write("### Terraform production plan\n\n")
+              stream.write(f"- Commit: `{os.environ['GITHUB_SHA']}`\n")
+              stream.write(f"- Exact plan SHA-256: `{plan_hash}`\n")
+              stream.write(f"- Redacted summary SHA-256: `{summary_hash}`\n")
+              stream.write(f"- Changed addresses: `{len(changes)}`\n\n")
+              if encryption_tool:
+                  stream.write(f"- age artifact ID: `{encryption_tool['artifact_id']}`\n")
+                  stream.write(f"- age artifact digest: `{encryption_tool['artifact_digest']}`\n")
+                  stream.write(f"- age binary SHA-256: `{encryption_tool['binary_sha256']}`\n")
+                  stream.write(f"- age version: `{encryption_tool['version']}`\n\n")
+              if changes:
+                  stream.write("| Actions | Resource address |\n")
+                  stream.write("| --- | --- |\n")
+                  for change in changes:
+                      actions = ", ".join(change["actions"])
+                      stream.write(
+                          f"| {markdown(actions)} | {markdown(change['address'])} |\n"
+                      )
+              else:
+                  stream.write("No production infrastructure changes were detected.\n")
+
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a") as stream:
+              stream.write(f"plan_sha256={plan_hash}\n")
+              stream.write(f"summary_sha256={summary_hash}\n")
+          PY
+      - name: Encrypt the exact plan before artifact upload
+        id: encrypt_plan
+        if: github.event_name == 'workflow_dispatch' && inputs.operation == 'terraform-apply' && steps.plan.outputs.changes == 'true'
+        env:
+          EXPECTED_AGE_BINARY_SHA256: ${{ needs.security_gate.outputs.age_binary_sha256 }}
+          PLAN_AGE_RECIPIENT: ${{ vars.TERRAFORM_PLAN_AGE_RECIPIENT }}
+        run: |
+          set -euo pipefail
+          plaintext="terraform-plan/tfplan"
+          ciphertext="terraform-plan/tfplan.age"
+          trap 'rm -f "$plaintext"' EXIT
+          age_binary=$(command -v age)
+          [[ "$age_binary" == "$RUNNER_TEMP/opsforge-age-bin/age" ]]
+          [[ "$(sha256sum "$age_binary" | cut -d ' ' -f 1)" == "$EXPECTED_AGE_BINARY_SHA256" ]]
+          [[ "$PLAN_AGE_RECIPIENT" =~ ^age1[0-9a-z]{58}$ ]]
+          "$age_binary" --encrypt --recipient "$PLAN_AGE_RECIPIENT" --output "$ciphertext" "$plaintext"
+          ciphertext_sha256=$(sha256sum "$ciphertext" | cut -d ' ' -f 1)
+          recipient_sha256=$(printf '%s' "$PLAN_AGE_RECIPIENT" | sha256sum | cut -d ' ' -f 1)
+          python - "$ciphertext_sha256" "$recipient_sha256" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          manifest_path = Path("terraform-plan/manifest.json")
+          manifest = json.loads(manifest_path.read_text())
+          manifest["encrypted_plan"] = {
+              "format": "age-v1",
+              "ciphertext_sha256": sys.argv[1],
+              "recipient_sha256": sys.argv[2],
+          }
+          manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+          PY
+          rm -f "$plaintext"
+          trap - EXIT
+          [[ ! -e "$plaintext" && -s "$ciphertext" ]]
+          {
+            echo "ciphertext_sha256=$ciphertext_sha256"
+            echo "recipient_sha256=$recipient_sha256"
+          } >> "$GITHUB_OUTPUT"
+      - name: Upload the exact plan for a protected apply request
+        id: plan_artifact
+        if: github.event_name == 'workflow_dispatch' && inputs.operation == 'terraform-apply' && steps.plan.outputs.changes == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: terraform-production-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            terraform-plan/manifest.json
+            terraform-plan/summary.json
+            terraform-plan/tfplan.age
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+          overwrite: false
+      - name: Record the immutable apply artifact for reviewers
+        if: github.event_name == 'workflow_dispatch' && inputs.operation == 'terraform-apply' && steps.plan.outputs.changes == 'true'
+        env:
+          ARTIFACT_DIGEST: ${{ steps.plan_artifact.outputs.artifact-digest }}
+          ARTIFACT_ID: ${{ steps.plan_artifact.outputs.artifact-id }}
+          CIPHERTEXT_SHA256: ${{ steps.encrypt_plan.outputs.ciphertext_sha256 }}
+          RECIPIENT_SHA256: ${{ steps.encrypt_plan.outputs.recipient_sha256 }}
+        run: |
+          [[ "$ARTIFACT_ID" =~ ^[0-9]+$ ]]
+          [[ "$ARTIFACT_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$CIPHERTEXT_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$RECIPIENT_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          {
+            echo
+            echo "#### Protected apply artifact"
+            echo
+            echo "- Artifact ID: \`$ARTIFACT_ID\`"
+            echo "- Artifact digest: \`$ARTIFACT_DIGEST\`"
+            echo "- Encrypted plan SHA-256: \`$CIPHERTEXT_SHA256\`"
+            echo "- Recipient SHA-256: \`$RECIPIENT_SHA256\`"
+            echo "- Retention: 1 day; an expired approval requires a new plan"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Fail a scheduled drift check after publishing the redacted summary
+        if: github.event_name == 'schedule' && steps.plan.outputs.changes == 'true'
+        run: |
+          echo "Scheduled Terraform drift check found unapplied production changes." >&2
+          exit 1
+      - name: Remove all Terraform plan material from the runner
+        if: always()
+        run: |
+          rm -f \
+            "$GITHUB_WORKSPACE/terraform-plan/manifest.json" \
+            "$GITHUB_WORKSPACE/terraform-plan/summary.json" \
+            "$GITHUB_WORKSPACE/terraform-plan/tfplan" \
+            "$GITHUB_WORKSPACE/terraform-plan/tfplan.age" \
+            "$RUNNER_TEMP/opsforge-approved-age/SHA256SUMS" \
+            "$RUNNER_TEMP/opsforge-approved-age/age" \
+            "$RUNNER_TEMP/opsforge-age-bin/age"
+          rmdir "$GITHUB_WORKSPACE/terraform-plan" 2>/dev/null || true
+          rmdir "$RUNNER_TEMP/opsforge-approved-age" 2>/dev/null || true
+          rmdir "$RUNNER_TEMP/opsforge-age-bin" 2>/dev/null || true
+          find "$RUNNER_TEMP" -maxdepth 1 -type f \
+            \( -name 'terraform-plan.*.log' -o -name 'terraform-plan.*.json' \
+            -o -name 'age-artifact.*.json' -o -name 'age-consumer-build-info.*' \) \
+            -delete
+
+  terraform_apply:
+    name: Apply the approved Terraform production plan
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      inputs.operation == 'terraform-apply' &&
+      inputs.confirmation == 'production' &&
+      github.ref == 'refs/heads/main' &&
+      vars.ENABLE_TERRAFORM_APPLY == 'true' &&
+      needs.security_gate.result == 'success' &&
+      needs.terraform_plan.result == 'success' &&
+      needs.terraform_plan.outputs.changes == 'true' &&
+      needs.terraform_plan.outputs.artifact_id != '' &&
+      needs.terraform_plan.outputs.artifact_digest != '' &&
+      needs.terraform_plan.outputs.ciphertext_sha256 != '' &&
+      needs.terraform_plan.outputs.recipient_sha256 != '' &&
+      needs.security_gate.outputs.age_artifact_id != '' &&
+      needs.security_gate.outputs.age_artifact_digest != '' &&
+      needs.security_gate.outputs.age_binary_sha256 != '' &&
+      needs.security_gate.outputs.age_version == 'v1.3.1-opsforge.1'
+    needs: [security_gate, terraform_plan]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    concurrency:
+      group: terraform-production
+      cancel-in-progress: false
+    environment: production
+    permissions:
+      actions: read # Resolve the immutable plan artifact and compare its service digest.
+      contents: read
+      id-token: write # Exchange GitHub OIDC identity for the protected AWS apply role.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify the approved source and artifact contract
+        env:
+          EXPECTED_ARTIFACT_DIGEST: ${{ needs.terraform_plan.outputs.artifact_digest }}
+          EXPECTED_ARTIFACT_ID: ${{ needs.terraform_plan.outputs.artifact_id }}
+          EXPECTED_AGE_ARTIFACT_DIGEST: ${{ needs.security_gate.outputs.age_artifact_digest }}
+          EXPECTED_AGE_ARTIFACT_ID: ${{ needs.security_gate.outputs.age_artifact_id }}
+          EXPECTED_AGE_BINARY_SHA256: ${{ needs.security_gate.outputs.age_binary_sha256 }}
+          EXPECTED_AGE_VERSION: ${{ needs.security_gate.outputs.age_version }}
+          EXPECTED_CIPHERTEXT_SHA256: ${{ needs.terraform_plan.outputs.ciphertext_sha256 }}
+          EXPECTED_PLAN_SHA256: ${{ needs.terraform_plan.outputs.plan_sha256 }}
+          EXPECTED_RECIPIENT_SHA256: ${{ needs.terraform_plan.outputs.recipient_sha256 }}
+          EXPECTED_SUMMARY_SHA256: ${{ needs.terraform_plan.outputs.summary_sha256 }}
+        run: |
+          [[ "$GITHUB_REF" == "refs/heads/main" ]]
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+          [[ -z "$(git status --porcelain)" ]]
+          [[ "$EXPECTED_ARTIFACT_ID" =~ ^[0-9]+$ ]]
+          [[ "$EXPECTED_ARTIFACT_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$EXPECTED_AGE_ARTIFACT_ID" =~ ^[0-9]+$ ]]
+          [[ "$EXPECTED_AGE_ARTIFACT_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$EXPECTED_AGE_BINARY_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$EXPECTED_AGE_VERSION" == "v1.3.1-opsforge.1" ]]
+          [[ "$EXPECTED_CIPHERTEXT_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$EXPECTED_PLAN_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$EXPECTED_RECIPIENT_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$EXPECTED_SUMMARY_SHA256" =~ ^[0-9a-f]{64}$ ]]
+      - name: Verify the centrally approved age artifact metadata
+        env:
+          EXPECTED_AGE_ARTIFACT_DIGEST: ${{ needs.security_gate.outputs.age_artifact_digest }}
+          EXPECTED_AGE_ARTIFACT_ID: ${{ needs.security_gate.outputs.age_artifact_id }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          artifact_json=$(mktemp "$RUNNER_TEMP/age-artifact.XXXXXX.json")
+          trap 'rm -f "$artifact_json"' EXIT
+          gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$EXPECTED_AGE_ARTIFACT_ID" > "$artifact_json"
+          python - "$artifact_json" <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          artifact = json.loads(Path(sys.argv[1]).read_text())
+          expected_name = f"approved-age-{os.environ['GITHUB_RUN_ID']}-{os.environ['GITHUB_RUN_ATTEMPT']}"
+          workflow_run = artifact.get("workflow_run") or {}
+          expected = {
+              "id": os.environ["EXPECTED_AGE_ARTIFACT_ID"],
+              "digest": os.environ["EXPECTED_AGE_ARTIFACT_DIGEST"],
+              "name": expected_name,
+          }
+          for field, value in expected.items():
+              if str(artifact.get(field)) != value:
+                  raise SystemExit(f"age artifact {field} does not match this security gate")
+          if artifact.get("expired") is not False:
+              raise SystemExit("The centrally approved age artifact is expired")
+          if str(workflow_run.get("id")) != os.environ["GITHUB_RUN_ID"]:
+              raise SystemExit("The age artifact belongs to a different workflow run")
+          if workflow_run.get("head_sha") != os.environ["GITHUB_SHA"]:
+              raise SystemExit("The age artifact belongs to a different commit")
+          if workflow_run.get("head_branch") != "main":
+              raise SystemExit("The age artifact was not built from main")
+          PY
+      - name: Download the centrally approved age decryptor
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.security_gate.outputs.age_artifact_id }}
+          path: ${{ runner.temp }}/opsforge-approved-age
+          digest-mismatch: error
+      - name: Verify and install the centrally approved age decryptor
+        env:
+          EXPECTED_AGE_BINARY_SHA256: ${{ needs.security_gate.outputs.age_binary_sha256 }}
+          EXPECTED_AGE_VERSION: ${{ needs.security_gate.outputs.age_version }}
+        run: |
+          set -euo pipefail
+          download_dir="$RUNNER_TEMP/opsforge-approved-age"
+          install_dir="$RUNNER_TEMP/opsforge-age-bin"
+          build_info=$(mktemp "$RUNNER_TEMP/age-consumer-build-info.XXXXXX")
+          trap 'rm -f "$build_info"' EXIT
+          mapfile -t entries < <(find "$download_dir" -mindepth 1 -maxdepth 1 -printf '%f\n' | LC_ALL=C sort)
+          [[ "${#entries[@]}" -eq 2 ]]
+          [[ "${entries[0]}" == "SHA256SUMS" && "${entries[1]}" == "age" ]]
+          [[ "$(wc -l < "$download_dir/SHA256SUMS")" -eq 1 ]]
+          (
+            cd "$download_dir"
+            sha256sum --check --strict SHA256SUMS
+          )
+          actual_sha256=$(sha256sum "$download_dir/age" | cut -d ' ' -f 1)
+          [[ "$EXPECTED_AGE_BINARY_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$actual_sha256" == "$EXPECTED_AGE_BINARY_SHA256" ]]
+          go version "$download_dir/age" | grep -F "go1.26.5"
+          go version -m "$download_dir/age" > "$build_info"
+          awk -F '\t' '$2 == "mod" && $3 == "filippo.io/age" && $4 == "v1.3.1-opsforge.1" { found = 1 } END { exit !found }' "$build_info"
+          awk -F '\t' '$2 == "dep" && $3 == "golang.org/x/crypto" && $4 == "v0.52.0" { found = 1 } END { exit !found }' "$build_info"
+          awk -F '\t' '$2 == "dep" && $3 == "golang.org/x/sys" && $4 == "v0.45.0" { found = 1 } END { exit !found }' "$build_info"
+          awk -F '\t' '$2 == "dep" && $3 == "golang.org/x/term" && $4 == "v0.43.0" { found = 1 } END { exit !found }' "$build_info"
+          awk -F '\t' '$2 == "build" && $3 == "vcs.revision=a4846cae78218ef337a4d30881e4f0bdbc49ffa5" { found = 1 } END { exit !found }' "$build_info"
+          awk -F '\t' '$2 == "build" && $3 == "vcs.modified=false" { found = 1 } END { exit !found }' "$build_info"
+          mkdir -p "$install_dir"
+          install -m 0755 "$download_dir/age" "$install_dir/age"
+          [[ "$("$install_dir/age" --version)" == "$EXPECTED_AGE_VERSION" ]]
+          echo "$install_dir" >> "$GITHUB_PATH"
+      - name: Verify the immutable artifact ID and service digest
+        env:
+          EXPECTED_ARTIFACT_DIGEST: ${{ needs.terraform_plan.outputs.artifact_digest }}
+          EXPECTED_ARTIFACT_ID: ${{ needs.terraform_plan.outputs.artifact_id }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          artifact_json=$(mktemp "$RUNNER_TEMP/terraform-artifact.XXXXXX.json")
+          trap 'rm -f "$artifact_json"' EXIT
+          gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$EXPECTED_ARTIFACT_ID" > "$artifact_json"
+          python - "$artifact_json" <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          artifact = json.loads(Path(sys.argv[1]).read_text())
+          expected_name = f"terraform-production-plan-{os.environ['GITHUB_RUN_ID']}-{os.environ['GITHUB_RUN_ATTEMPT']}"
+          workflow_run = artifact.get("workflow_run") or {}
+          if str(artifact.get("id")) != os.environ["EXPECTED_ARTIFACT_ID"]:
+              raise SystemExit("GitHub returned a different Terraform plan artifact ID")
+          if artifact.get("digest") != os.environ["EXPECTED_ARTIFACT_DIGEST"]:
+              raise SystemExit("Terraform plan artifact service digest does not match")
+          if artifact.get("name") != expected_name:
+              raise SystemExit("Terraform plan artifact name does not match this run attempt")
+          if artifact.get("expired") is not False:
+              raise SystemExit("Terraform plan artifact is expired")
+          if str(workflow_run.get("id")) != os.environ["GITHUB_RUN_ID"]:
+              raise SystemExit("Terraform plan artifact belongs to a different workflow run")
+          if workflow_run.get("head_sha") != os.environ["GITHUB_SHA"]:
+              raise SystemExit("Terraform plan artifact belongs to a different commit")
+          if workflow_run.get("head_branch") != "main":
+              raise SystemExit("Terraform plan artifact was not created from main")
+          PY
+      - name: Download only the approved production plan
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.terraform_plan.outputs.artifact_id }}
+          path: terraform-plan
+          digest-mismatch: error
+      - name: Verify the encrypted plan evidence before obtaining write credentials
+        env:
+          CURRENT_AGE_RECIPIENT: ${{ vars.TERRAFORM_PLAN_AGE_RECIPIENT }}
+          EXPECTED_AGE_ARTIFACT_DIGEST: ${{ needs.security_gate.outputs.age_artifact_digest }}
+          EXPECTED_AGE_ARTIFACT_ID: ${{ needs.security_gate.outputs.age_artifact_id }}
+          EXPECTED_AGE_BINARY_SHA256: ${{ needs.security_gate.outputs.age_binary_sha256 }}
+          EXPECTED_AGE_VERSION: ${{ needs.security_gate.outputs.age_version }}
+          EXPECTED_CIPHERTEXT_SHA256: ${{ needs.terraform_plan.outputs.ciphertext_sha256 }}
+          EXPECTED_PLAN_SHA256: ${{ needs.terraform_plan.outputs.plan_sha256 }}
+          EXPECTED_RECIPIENT_SHA256: ${{ needs.terraform_plan.outputs.recipient_sha256 }}
+          EXPECTED_SUMMARY_SHA256: ${{ needs.terraform_plan.outputs.summary_sha256 }}
+          TERRAFORM_VERSION: 1.15.8
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          evidence_dir = Path("terraform-plan")
+          ciphertext_path = evidence_dir / "tfplan.age"
+          summary_path = evidence_dir / "summary.json"
+          manifest_path = evidence_dir / "manifest.json"
+
+          def sha256(path):
+              digest = hashlib.sha256()
+              with Path(path).open("rb") as stream:
+                  for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                      digest.update(chunk)
+              return digest.hexdigest()
+
+          manifest = json.loads(manifest_path.read_text())
+          expected_manifest = {
+              "schema": 2,
+              "repository": os.environ["GITHUB_REPOSITORY"],
+              "commit": os.environ["GITHUB_SHA"],
+              "ref": "refs/heads/main",
+              "event": "workflow_dispatch",
+              "run_id": os.environ["GITHUB_RUN_ID"],
+              "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
+              "workflow_ref": os.environ["GITHUB_WORKFLOW_REF"],
+              "terraform_version": os.environ["TERRAFORM_VERSION"],
+              "platform": "linux_amd64",
+          }
+          for field, expected in expected_manifest.items():
+              if manifest.get(field) != expected:
+                  raise SystemExit(f"Terraform plan manifest {field} does not match this run")
+
+          expected_encryption_tool = {
+              "name": "age",
+              "version": os.environ["EXPECTED_AGE_VERSION"],
+              "artifact_id": os.environ["EXPECTED_AGE_ARTIFACT_ID"],
+              "artifact_digest": os.environ["EXPECTED_AGE_ARTIFACT_DIGEST"],
+              "binary_sha256": os.environ["EXPECTED_AGE_BINARY_SHA256"],
+          }
+          if manifest.get("encryption_tool") != expected_encryption_tool:
+              raise SystemExit("Terraform plan references a different age artifact")
+
+          ciphertext_hash = sha256(ciphertext_path)
+          summary_hash = sha256(summary_path)
+          encrypted_plan = manifest.get("encrypted_plan", {})
+          if encrypted_plan.get("format") != "age-v1":
+              raise SystemExit("Terraform plan artifact is not age encrypted")
+          if ciphertext_hash != os.environ["EXPECTED_CIPHERTEXT_SHA256"] or ciphertext_hash != encrypted_plan.get("ciphertext_sha256"):
+              raise SystemExit("Encrypted Terraform plan SHA-256 does not match the approved artifact")
+          if encrypted_plan.get("recipient_sha256") != os.environ["EXPECTED_RECIPIENT_SHA256"]:
+              raise SystemExit("Terraform plan recipient hash does not match the approved recipient")
+          current_recipient_hash = hashlib.sha256(
+              os.environ["CURRENT_AGE_RECIPIENT"].encode()
+          ).hexdigest()
+          if current_recipient_hash != os.environ["EXPECTED_RECIPIENT_SHA256"]:
+              raise SystemExit("Terraform plan recipient was rotated; create a fresh plan")
+          if manifest.get("plan_sha256") != os.environ["EXPECTED_PLAN_SHA256"]:
+              raise SystemExit("Terraform manifest references a different plaintext plan")
+          if summary_hash != os.environ["EXPECTED_SUMMARY_SHA256"] or summary_hash != manifest.get("summary_sha256"):
+              raise SystemExit("Terraform summary SHA-256 does not match the approved summary")
+
+          summary = json.loads(summary_path.read_text())
+          if set(summary) != {"schema", "has_changes", "plan_sha256", "action_counts", "resource_changes"}:
+              raise SystemExit("Terraform summary contains unexpected fields")
+          if summary.get("schema") != 1 or summary.get("has_changes") is not True:
+              raise SystemExit("The approved Terraform plan does not contain changes")
+          if summary.get("plan_sha256") != os.environ["EXPECTED_PLAN_SHA256"]:
+              raise SystemExit("Terraform summary references a different plan")
+          for change in summary.get("resource_changes", []):
+              if set(change) != {"address", "actions"}:
+                  raise SystemExit("Terraform summary contains non-redacted resource data")
+              if not isinstance(change["address"], str) or not isinstance(change["actions"], list):
+                  raise SystemExit("Terraform summary has an invalid resource change")
+          print("The encrypted plan is bound to this repository, commit, workflow run, recipient, and redacted summary.")
+          PY
+      - name: Decrypt and verify the exact plan after environment approval
+        id: decrypt_plan
+        env:
+          AGE_IDENTITY: ${{ secrets.TERRAFORM_PLAN_AGE_IDENTITY }}
+          EXPECTED_AGE_BINARY_SHA256: ${{ needs.security_gate.outputs.age_binary_sha256 }}
+          EXPECTED_PLAN_SHA256: ${{ needs.terraform_plan.outputs.plan_sha256 }}
+        run: |
+          set -euo pipefail
+          approved_dir="$RUNNER_TEMP/opsforge-approved-terraform-plan"
+          identity_file="$approved_dir/identity.txt"
+          plaintext="$approved_dir/tfplan"
+          keep_plan=false
+          cleanup() {
+            rm -f "$identity_file"
+            if [[ "$keep_plan" != "true" ]]; then
+              rm -f "$plaintext"
+              rmdir "$approved_dir" 2>/dev/null || true
+            fi
+          }
+          trap cleanup EXIT
+          [[ -n "$AGE_IDENTITY" ]]
+          age_binary=$(command -v age)
+          [[ "$age_binary" == "$RUNNER_TEMP/opsforge-age-bin/age" ]]
+          [[ "$(sha256sum "$age_binary" | cut -d ' ' -f 1)" == "$EXPECTED_AGE_BINARY_SHA256" ]]
+          install -d -m 0700 "$approved_dir"
+          printf '%s\n' "$AGE_IDENTITY" > "$identity_file"
+          chmod 0600 "$identity_file"
+          "$age_binary" --decrypt \
+            --identity "$identity_file" \
+            --output "$plaintext" \
+            terraform-plan/tfplan.age
+          [[ "$(sha256sum "$plaintext" | cut -d ' ' -f 1)" == "$EXPECTED_PLAN_SHA256" ]]
+          keep_plan=true
+          echo "plan_path=$plaintext" >> "$GITHUB_OUTPUT"
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4
+        with:
+          terraform_version: 1.15.8
+          terraform_wrapper: false
+      - name: Configure protected production AWS credentials
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        with:
+          role-to-assume: ${{ vars.AWS_TERRAFORM_APPLY_ROLE_ARN }}
+          role-session-name: opsforge-terraform-apply-${{ github.run_id }}
+          aws-region: ${{ vars.AWS_REGION }}
+          mask-aws-account-id: true
+      - name: Initialize providers for the approved plan
+        run: |
+          terraform -chdir=infra/terraform init -input=false -lockfile=readonly
+          git diff --exit-code -- infra/terraform/.terraform.lock.hcl
+      - name: Apply only the approved production plan
+        env:
+          APPROVED_PLAN_PATH: ${{ steps.decrypt_plan.outputs.plan_path }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          TF_VAR_aws_region: ${{ vars.AWS_REGION }}
+          TF_VAR_domain_name: ${{ vars.OPSFORGE_DOMAIN }}
+          TF_VAR_grafana_domain_name: ${{ vars.GRAFANA_DOMAIN }}
+          TF_VAR_argocd_domain_name: ${{ vars.ARGOCD_DOMAIN }}
+          TF_VAR_cloudflare_zone_id: ${{ vars.CLOUDFLARE_ZONE_ID }}
+          TF_VAR_cloudflare_account_id: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          TF_VAR_cloudflare_access_email: ${{ vars.CLOUDFLARE_ACCESS_EMAIL }}
+          TF_VAR_cloudflare_github_idp_id: ${{ vars.CLOUDFLARE_GITHUB_IDP_ID }}
+          TF_VAR_enable_admin_access: ${{ vars.ENABLE_ADMIN_ACCESS || 'false' }}
+          TF_VAR_ssh_allowed_cidr: ${{ vars.SSH_ALLOWED_CIDR }}
+          TF_VAR_ssh_public_key: ${{ vars.SSH_PUBLIC_KEY }}
+          TF_VAR_budget_alert_email: ${{ vars.BUDGET_ALERT_EMAIL }}
+        run: |
+          terraform -chdir=infra/terraform apply \
+            -auto-approve \
+            -input=false \
+            -lock-timeout=5m \
+            "$APPROVED_PLAN_PATH"
+      - name: Remove the downloaded plan from the runner
+        if: always()
+        run: |
+          rm -f \
+            "$GITHUB_WORKSPACE/terraform-plan/manifest.json" \
+            "$GITHUB_WORKSPACE/terraform-plan/summary.json" \
+            "$GITHUB_WORKSPACE/terraform-plan/tfplan.age" \
+            "$RUNNER_TEMP/opsforge-approved-age/SHA256SUMS" \
+            "$RUNNER_TEMP/opsforge-approved-age/age" \
+            "$RUNNER_TEMP/opsforge-age-bin/age" \
+            "$RUNNER_TEMP/opsforge-approved-terraform-plan/identity.txt" \
+            "$RUNNER_TEMP/opsforge-approved-terraform-plan/tfplan"
+          rmdir "$GITHUB_WORKSPACE/terraform-plan" 2>/dev/null || true
+          rmdir "$RUNNER_TEMP/opsforge-approved-age" 2>/dev/null || true
+          rmdir "$RUNNER_TEMP/opsforge-age-bin" 2>/dev/null || true
+          rmdir "$RUNNER_TEMP/opsforge-approved-terraform-plan" 2>/dev/null || true
+          find "$RUNNER_TEMP" -maxdepth 1 -type f \
+            \( -name 'terraform-artifact.*.json' -o -name 'age-artifact.*.json' \
+            -o -name 'age-consumer-build-info.*' \) \
+            -delete
+
+  release:
+    name: Publish and attest approved images
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.security_gate.result == 'success'
+    needs: [build_images, security_gate]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     permissions:
       contents: read
-      packages: write
-      id-token: write
-      attestations: write
+      packages: write # Push the approved images to GHCR.
+      id-token: write # Obtain the OIDC identity used to sign attestations.
+      attestations: write # Store provenance and SBOM attestations.
     outputs:
       backend_digest: ${{ steps.publish.outputs.backend_digest }}
       frontend_digest: ${{ steps.publish.outputs.frontend_digest }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Download approved image archives
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          persist-credentials: false
-      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
-      - name: Build release images
+          artifact-ids: ${{ needs.build_images.outputs.artifact_id }}
+          path: release-images
+          digest-mismatch: error
+      - name: Download security evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.security_gate.outputs.evidence_artifact_id }}
+          path: security-evidence
+          digest-mismatch: error
+      - name: Verify security approval and artifact hashes
+        env:
+          EXPECTED_IMAGE_ARTIFACT_ID: ${{ needs.build_images.outputs.artifact_id }}
+          EXPECTED_IMAGE_ARTIFACT_DIGEST: ${{ needs.build_images.outputs.artifact_digest }}
+          EXPECTED_BACKEND_SHA256: ${{ needs.build_images.outputs.backend_sha256 }}
+          EXPECTED_FRONTEND_SHA256: ${{ needs.build_images.outputs.frontend_sha256 }}
         run: |
-          docker buildx build --load --platform linux/amd64 \
-            --cache-from type=gha,scope=backend \
-            --cache-to type=gha,mode=max,scope=backend \
-            --tag "$BACKEND_IMAGE:$GITHUB_SHA" ./backend
-          docker buildx build --load --platform linux/amd64 \
-            --cache-from type=gha,scope=frontend \
-            --cache-to type=gha,mode=max,scope=frontend \
-            --tag "$FRONTEND_IMAGE:$GITHUB_SHA" ./frontend
-      - name: Scan backend release image
-        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
-        with:
-          image-ref: ${{ env.BACKEND_IMAGE }}:${{ github.sha }}
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
-          exit-code: 1
-          scanners: vuln
-      - name: Scan frontend release image
-        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
-        with:
-          image-ref: ${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
-          exit-code: 1
-          scanners: vuln
-          skip-setup-trivy: true
-      - name: Generate release SBOMs
-        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
-        with:
-          image-ref: ${{ env.BACKEND_IMAGE }}:${{ github.sha }}
-          format: cyclonedx
-          output: backend-sbom.cdx.json
-          scan-type: image
-          skip-setup-trivy: true
-      - name: Generate frontend SBOM
-        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
-        with:
-          image-ref: ${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
-          format: cyclonedx
-          output: frontend-sbom.cdx.json
-          scan-type: image
-          skip-setup-trivy: true
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          def sha256(path):
+              digest = hashlib.sha256()
+              with Path(path).open("rb") as stream:
+                  for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                      digest.update(chunk)
+              return digest.hexdigest()
+
+          approval = json.loads(Path("security-evidence/approval.json").read_text())
+          expected = {
+              "schema": 3,
+              "repository": os.environ["GITHUB_REPOSITORY"],
+              "commit": os.environ["GITHUB_SHA"],
+              "run_id": os.environ["GITHUB_RUN_ID"],
+          }
+          for key, value in expected.items():
+              if approval.get(key) != value:
+                  raise SystemExit(f"Approval {key} does not match this workflow run")
+
+          artifact = approval.get("image_artifact", {})
+          if artifact.get("id") != os.environ["EXPECTED_IMAGE_ARTIFACT_ID"]:
+              raise SystemExit("Approval references a different image artifact ID")
+          if artifact.get("digest") != os.environ["EXPECTED_IMAGE_ARTIFACT_DIGEST"]:
+              raise SystemExit("Approval references a different image artifact digest")
+
+          archives = {
+              "backend": ("release-images/backend-image.tar", os.environ["EXPECTED_BACKEND_SHA256"]),
+              "frontend": ("release-images/frontend-image.tar", os.environ["EXPECTED_FRONTEND_SHA256"]),
+          }
+          for name, (path, expected_hash) in archives.items():
+              actual_hash = sha256(path)
+              approved_hash = approval.get("images", {}).get(name, {}).get("archive_sha256")
+              if actual_hash != expected_hash or actual_hash != approved_hash:
+                  raise SystemExit(f"{name} image archive hash is not approved")
+
+          sboms = {
+              "backend": "security-evidence/backend-sbom.cdx.json",
+              "frontend": "security-evidence/frontend-sbom.cdx.json",
+          }
+          for name, path in sboms.items():
+              actual_hash = sha256(path)
+              approved_hash = approval.get("sboms", {}).get(name, {}).get("sha256")
+              if actual_hash != approved_hash:
+                  raise SystemExit(f"{name} SBOM hash is not approved")
+
+          scanner = approval.get("scanner", {})
+          scanner_evidence = {
+              "build_info_sha256": "security-evidence/trivy-toolchain-build-info.txt",
+              "version_report_sha256": "security-evidence/trivy-toolchain-version.txt",
+              "self_scan_sha256": "security-evidence/trivy-toolchain-vulnerabilities.json",
+              "patch_sha256": "security-evidence/trivy-toolchain.patch",
+          }
+          for field, path in scanner_evidence.items():
+              if sha256(path) != scanner.get(field):
+                  raise SystemExit(f"Trivy scanner evidence {field} is not approved")
+          encryption_tool = approval.get("encryption_tool", {})
+          encryption_tool_evidence = {
+              "build_info_sha256": "security-evidence/age-toolchain-build-info.txt",
+              "version_report_sha256": "security-evidence/age-toolchain-version.txt",
+              "self_scan_sha256": "security-evidence/age-toolchain-vulnerabilities.json",
+              "patch_sha256": "security-evidence/age-toolchain.patch",
+              "manifest_sha256": "security-evidence/age-toolchain-SHA256SUMS",
+          }
+          for field, path in encryption_tool_evidence.items():
+              if sha256(path) != encryption_tool.get(field):
+                  raise SystemExit(f"age encryption-tool evidence {field} is not approved")
+          age_manifest = Path(
+              "security-evidence/age-toolchain-SHA256SUMS"
+          ).read_text().split()
+          if age_manifest != [encryption_tool.get("binary_sha256"), "age"]:
+              raise SystemExit("age encryption-tool manifest does not match its approved binary hash")
+          print("Release evidence matches this repository, commit, run, and exact image archives.")
+          PY
+          cd release-images
+          sha256sum --check SHA256SUMS
+      - name: Load approved images without executing them
+        run: |
+          docker load --input release-images/backend-image.tar
+          docker load --input release-images/frontend-image.tar
+          docker image inspect "$BACKEND_IMAGE:$GITHUB_SHA" >/dev/null
+          docker image inspect "$FRONTEND_IMAGE:$GITHUB_SHA" >/dev/null
       - name: Login to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
@@ -319,8 +2441,12 @@ jobs:
           docker push "$FRONTEND_IMAGE:$GITHUB_SHA"
           backend_ref=$(docker image inspect --format='{{index .RepoDigests 0}}' "$BACKEND_IMAGE:$GITHUB_SHA")
           frontend_ref=$(docker image inspect --format='{{index .RepoDigests 0}}' "$FRONTEND_IMAGE:$GITHUB_SHA")
-          echo "backend_digest=${backend_ref#*@}" >> "$GITHUB_OUTPUT"
-          echo "frontend_digest=${frontend_ref#*@}" >> "$GITHUB_OUTPUT"
+          backend_digest=${backend_ref#*@}
+          frontend_digest=${frontend_ref#*@}
+          [[ "$backend_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$frontend_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          echo "backend_digest=$backend_digest" >> "$GITHUB_OUTPUT"
+          echo "frontend_digest=$frontend_digest" >> "$GITHUB_OUTPUT"
       - name: Attest backend provenance
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
@@ -332,7 +2458,7 @@ jobs:
         with:
           subject-name: ${{ env.BACKEND_IMAGE }}
           subject-digest: ${{ steps.publish.outputs.backend_digest }}
-          sbom-path: backend-sbom.cdx.json
+          sbom-path: security-evidence/backend-sbom.cdx.json
           push-to-registry: true
       - name: Attest frontend provenance
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
@@ -345,13 +2471,13 @@ jobs:
         with:
           subject-name: ${{ env.FRONTEND_IMAGE }}
           subject-digest: ${{ steps.publish.outputs.frontend_digest }}
-          sbom-path: frontend-sbom.cdx.json
+          sbom-path: security-evidence/frontend-sbom.cdx.json
           push-to-registry: true
 
   promote:
     name: Open GitOps promotion PR
-    if: github.event_name == 'push' && vars.ENABLE_GITOPS_PROMOTION == 'true'
-    needs: images
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.ENABLE_GITOPS_PROMOTION == 'true' && needs.release.result == 'success'
+    needs: release
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -375,20 +2501,32 @@ jobs:
         with:
           persist-credentials: false
           path: source
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
       - name: Checkout GitOps repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           repository: ${{ env.GITOPS_OWNER }}/${{ env.GITOPS_REPOSITORY }}
           token: ${{ steps.app-token.outputs.token }}
           path: gitops
+          persist-credentials: false
       - name: Update and validate production digests
         working-directory: gitops
         env:
-          BACKEND_DIGEST: ${{ needs.images.outputs.backend_digest }}
-          FRONTEND_DIGEST: ${{ needs.images.outputs.frontend_digest }}
+          BACKEND_DIGEST: ${{ needs.release.outputs.backend_digest }}
+          FRONTEND_DIGEST: ${{ needs.release.outputs.frontend_digest }}
         run: |
-          python3 -m pip install --disable-pip-version-check PyYAML==6.0.3
-          python3 ../source/scripts/update-images.py \
+          python -m pip install \
+            --disable-pip-version-check \
+            --no-cache-dir \
+            --no-deps \
+            --only-binary=:all: \
+            --require-hashes \
+            -r ../source/backend/requirements-gitops.txt
+          python -m pip check
+          [[ "$(python -c 'import yaml; print(yaml.__version__)')" == "6.0.3" ]]
+          python ../source/scripts/update-images.py \
             --backend "$BACKEND_IMAGE@$BACKEND_DIGEST" \
             --frontend "$FRONTEND_IMAGE@$FRONTEND_DIGEST"
           kubectl kustomize production >/tmp/opsforge-applications.yaml
@@ -401,18 +2539,37 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
+          gh auth setup-git
           branch="promote/${GITHUB_SHA}"
           repository="$GITOPS_OWNER/$GITOPS_REPOSITORY"
-          existing_pr=$(gh pr list --repo "$repository" --state open --head "$branch" --json number --jq '.[0].number // empty')
-          if [[ -n "$existing_pr" ]]; then
-            echo "Promotion PR #$existing_pr already exists."
-            exit 0
-          fi
           git config user.name "opsforge-gitops[bot]"
           git config user.email "opsforge-gitops[bot]@users.noreply.github.com"
           git switch -c "$branch"
           git add production
           if git diff --cached --quiet; then
+            existing_pr=$(gh api --method GET "repos/$repository/pulls" \
+              -f state=open \
+              -f base=main \
+              -f head="$GITOPS_OWNER:$branch" \
+              --jq '.[0].number // empty')
+            if git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
+              git fetch --no-tags origin "refs/heads/$branch:refs/remotes/origin/$branch"
+              if ! git diff --quiet "refs/remotes/origin/$branch" HEAD; then
+                echo "A stale promotion branch could roll back the already-promoted digests." >&2
+                exit 1
+              fi
+            elif [[ -n "$existing_pr" ]]; then
+              echo "Promotion PR #$existing_pr has no matching repository-owned branch." >&2
+              exit 1
+            fi
+            if [[ -n "$existing_pr" ]]; then
+              pr_head=$(gh api "repos/$repository/pulls/$existing_pr" --jq .head.sha)
+              remote_head=$(git rev-parse "refs/remotes/origin/$branch")
+              if [[ "$pr_head" != "$remote_head" ]]; then
+                echo "Promotion PR #$existing_pr does not point at the validated branch head." >&2
+                exit 1
+              fi
+            fi
             echo "These image digests are already promoted."
             exit 0
           fi
@@ -425,6 +2582,21 @@ jobs:
             fi
           else
             git push --set-upstream origin "$branch"
+          fi
+          existing_pr=$(gh api --method GET "repos/$repository/pulls" \
+            -f state=open \
+            -f base=main \
+            -f head="$GITOPS_OWNER:$branch" \
+            --jq '.[0].number // empty')
+          if [[ -n "$existing_pr" ]]; then
+            pr_head=$(gh api "repos/$repository/pulls/$existing_pr" --jq .head.sha)
+            remote_head=$(git rev-parse "refs/remotes/origin/$branch")
+            if [[ "$pr_head" != "$remote_head" ]] || ! git diff --quiet "$remote_head" HEAD; then
+              echo "Promotion PR #$existing_pr does not contain the exact validated digest change." >&2
+              exit 1
+            fi
+            echo "Promotion PR #$existing_pr already contains the exact validated digest change."
+            exit 0
           fi
           gh pr create --repo "$repository" --base main --head "$branch" \
             --title "promote: OpsForge ${GITHUB_SHA}" \

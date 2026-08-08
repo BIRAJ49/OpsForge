@@ -33,6 +33,7 @@ tfplan-*
 **/tfplan-*
 *.tfvars
 *.tfvars.json
+terraform-plan-identity.txt
 crash.log
 crash.*.log
 override.tf

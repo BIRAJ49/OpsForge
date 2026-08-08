@@ -1,0 +1,3 @@
+# Trusted tooling used only by the gated GitOps promotion job.
+# Regenerate requirements-gitops.txt with the command recorded in its header.
+PyYAML==6.0.3

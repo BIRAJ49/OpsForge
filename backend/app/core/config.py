@@ -6,7 +6,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=".env", env_file_encoding="utf-8", extra="ignore"
+    )
 
     APP_NAME: str = "OpsForge"
     APP_ENV: str = "development"
@@ -42,7 +44,9 @@ class Settings(BaseSettings):
     GITHUB_GITOPS_REPO: str = "opsforge-gitops"
     GITHUB_OAUTH_CLIENT_ID: str | None = None
     GITHUB_OAUTH_CLIENT_SECRET: str | None = None
-    GITHUB_OAUTH_REDIRECT_URI: str = "http://localhost:8000/api/integrations/github/oauth/callback"
+    GITHUB_OAUTH_REDIRECT_URI: str = (
+        "http://localhost:8000/api/integrations/github/oauth/callback"
+    )
     FRONTEND_URL: str = "http://localhost:5173"
 
     GHCR_REGISTRY: str = "ghcr.io"
@@ -79,19 +83,24 @@ class Settings(BaseSettings):
     PROJECT_ANALYZER_MODE: str = "rule_based"
     MAX_UPLOAD_SIZE_MB: int = 50
     MAX_UPLOAD_FILE_SIZE_MB: int = 100
+    MAX_UPLOAD_FILE_COUNT: int = 10000
+    MAX_UPLOAD_PATH_DEPTH: int = 32
+    MAX_UPLOAD_PATH_LENGTH: int = 1024
     UPLOAD_TEMP_DIR: str = "/tmp/opsforge-uploads"
     DELETE_UPLOAD_AFTER_ANALYSIS: bool = True
     ALLOW_GITHUB_IMPORT: bool = True
     ALLOW_ZIP_UPLOAD: bool = True
     MONITORING_MODE: str = "mock"
-    PROMETHEUS_URL: str = "http://monitoring-kube-prometheus-prometheus.monitoring.svc.cluster.local:9090"
+    PROMETHEUS_URL: str = (
+        "http://monitoring-kube-prometheus-prometheus.monitoring.svc.cluster.local:9090"
+    )
     PROMETHEUS_QUERY_TIMEOUT_SECONDS: int = 12
     LOGS_MODE: str = "mock"
     LOKI_URL: str = "http://loki.monitoring.svc.cluster.local:3100"
     LOKI_QUERY_TIMEOUT_SECONDS: int = 12
     LOKI_DEFAULT_NAMESPACE: str = "opsforge-system"
 
-    TRIVY_ENABLED: bool = True
+    TRIVY_ENABLED: bool = False
     TRIVY_PATH: str = "trivy"
 
     REDIS_URL: str = "redis://localhost:6379/0"
@@ -108,7 +117,9 @@ class Settings(BaseSettings):
 
     @property
     def cors_origins_list(self) -> list[str]:
-        return [origin.strip() for origin in self.CORS_ORIGINS.split(",") if origin.strip()]
+        return [
+            origin.strip() for origin in self.CORS_ORIGINS.split(",") if origin.strip()
+        ]
 
     @model_validator(mode="after")
     def validate_production_secrets(self):
@@ -120,7 +131,9 @@ class Settings(BaseSettings):
             }
             for name, value in weak_values.items():
                 if value.startswith("change-this") or len(value) < 16:
-                    raise ValueError(f"{name} must be set to a strong environment value in production")
+                    raise ValueError(
+                        f"{name} must be set to a strong environment value in production"
+                    )
         return self
 
 
