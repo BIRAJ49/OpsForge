@@ -75,7 +75,7 @@ Each generated file has an isolated preview page with copy and download actions.
 
 ### GitHub Actions CI/CD
 
-OpsForge includes a GitHub Actions pipeline that tests the application, builds each image once, approves the exact image archives through one centralized security gate, publishes only those archives to GHCR with SBOMs and attestations, and opens a reviewed digest-only GitOps promotion pull request.
+OpsForge includes a deployment-only GitHub Actions workflow. It builds the backend and frontend images, publishes commit-specific images to GHCR, and opens a digest-only deployment pull request in the GitOps repository.
 
 ![OpsForge GitHub Actions CI/CD deployment](screenshoot/08-github-actions-cd.png)
 
@@ -103,17 +103,14 @@ OpsForge shows Kubernetes, logs, security, incidents, and healing actions
 
 OpsForge has a GitHub Actions workflow for this repo:
 
-- Runs backend tests
-- Builds the frontend
-- Builds backend and frontend images once in an unprivileged job
-- Runs dependency, CodeQL, secret, IaC, and container scanning in one fail-closed `Security gate`
-- Passes immutable artifact IDs, SHA-256 checksums, SBOMs, and approval evidence to release
-- Pushes only the scanned image archives to GitHub Container Registry; release never rebuilds
-- Publishes commit-SHA images and promotes immutable digests
-- Generates CycloneDX SBOMs and build attestations
-- Opens a reviewed GitOps promotion pull request
-- Runs production Terraform plans only after the same `Security gate`
-- Applies only an age-encrypted, commit-bound saved plan after protected-environment approval
+- Runs only for `main` pushes or a manual dispatch from `main`
+- Builds and publishes backend and frontend images to GHCR
+- Records each registry digest and updates the digest-pinned GitOps state
+- Renders the updated Kustomize manifests before opening a deployment pull request
+- Leaves deployment approval to the GitOps pull request; Argo CD reconciles it after merge
+
+It does not run pull-request CI, scheduled jobs, dependency bots, CodeQL, Trivy,
+dependency audits, SBOM generation, attestations, uptime checks, or Terraform.
 
 Workflow file:
 
@@ -128,7 +125,7 @@ ghcr.io/biraj49/opsforge-backend:<commit-sha>
 ghcr.io/biraj49/opsforge-frontend:<commit-sha>
 ```
 
-The production workflow never writes application state directly to the cluster. It pushes verified images to GHCR and opens a digest-only pull request in the dedicated GitOps repository; Argo CD reconciles the merged desired state. Credential-free Terraform validation, gated plans, and explicitly approved exact-plan applies are consolidated in this workflow, but apply remains a separate manual protected job rather than an application-release stage. External uptime checks remain in their own operational workflow.
+The production workflow never writes application state directly to the cluster. It pushes images to GHCR and opens a digest-only pull request in the dedicated GitOps repository; Argo CD reconciles the desired state only after that pull request is merged.
 
 ## GitOps And Kubernetes
 
@@ -155,10 +152,9 @@ OpsForge also has monitoring pages for cluster metrics and workload data.
 
 ## Security Scanning
 
-The GitHub Actions `Security gate` centralizes dependency, CodeQL, workflow,
-secret, IaC, and exact-image scanning before release. It also creates validated
-CycloneDX SBOMs. The production backend does not embed Trivy; its optional
-synchronous scan endpoint is disabled until it can run in an isolated worker.
+The GitHub Actions delivery workflow does not run security scanners or scanning
+bots. The production backend does not embed Trivy; its optional synchronous
+scan endpoint remains disabled unless an operator configures it separately.
 
 ## Incident Analysis And Healing
 
@@ -315,7 +311,7 @@ SMTP_FROM_EMAIL
 
 - Add final screenshots for GitHub Actions, Argo CD, Kubernetes, monitoring, Trivy, incidents, healing, admin pages, and audit logs
 - Polish generated app deployment templates for every stack type
-- Create and protect the dedicated GitOps repository, then enable digest promotion PRs
+- Create and protect the dedicated GitOps repository, then configure its deployment credentials
 - Add deeper Grafana/Loki embeds or links inside OpsForge
 - Add cloud cost visibility later
 - Record final demo video
