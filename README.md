@@ -112,8 +112,6 @@ OpsForge has a GitHub Actions workflow for this repo:
 - Publishes commit-SHA images and promotes immutable digests
 - Generates CycloneDX SBOMs and build attestations
 - Opens a reviewed GitOps promotion pull request
-- Runs production Terraform plans only after the same `Security gate`
-- Applies only an age-encrypted, commit-bound saved plan after protected-environment approval
 
 Workflow file:
 
@@ -128,7 +126,7 @@ ghcr.io/biraj49/opsforge-backend:<commit-sha>
 ghcr.io/biraj49/opsforge-frontend:<commit-sha>
 ```
 
-The production workflow never writes application state directly to the cluster. It pushes verified images to GHCR and opens a digest-only pull request in the dedicated GitOps repository; Argo CD reconciles the merged desired state. Credential-free Terraform validation, gated plans, and explicitly approved exact-plan applies are consolidated in this workflow, but apply remains a separate manual protected job rather than an application-release stage. External uptime checks remain in their own operational workflow.
+The production workflow never writes application state directly to the cluster. It pushes verified images to GHCR and opens a digest-only pull request in the dedicated GitOps repository; Argo CD reconciles the merged desired state. Credential-free Terraform format and validation checks remain part of CI, while production Terraform plan/apply runs outside the application workflow. GitHub Actions does not run scheduled uptime checks; use independent synthetic monitoring for production availability.
 
 ## GitOps And Kubernetes
 
