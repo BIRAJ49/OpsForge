@@ -75,7 +75,7 @@ Each generated file has an isolated preview page with copy and download actions.
 
 ### GitHub Actions CI/CD
 
-OpsForge includes a GitHub Actions pipeline that tests the backend, builds the frontend, builds Docker images, pushes them to GHCR, and updates the K3s deployment on EC2.
+OpsForge includes a GitHub Actions pipeline that tests the application, scans the exact release images, publishes them to GHCR with SBOMs and attestations, and opens a reviewed digest-only GitOps promotion pull request.
 
 ![OpsForge GitHub Actions CI/CD deployment](screenshoot/08-github-actions-cd.png)
 
@@ -107,7 +107,9 @@ OpsForge has a GitHub Actions workflow for this repo:
 - Builds the frontend
 - Builds backend and frontend Docker images
 - Pushes images to GitHub Container Registry
-- Tags images with `latest` and the commit SHA
+- Publishes commit-SHA images and promotes immutable digests
+- Generates CycloneDX SBOMs and build attestations
+- Opens a reviewed GitOps promotion pull request
 
 Workflow file:
 
@@ -118,11 +120,11 @@ Workflow file:
 Images:
 
 ```text
-ghcr.io/biraj49/opsforge-backend:latest
-ghcr.io/biraj49/opsforge-frontend:latest
+ghcr.io/biraj49/opsforge-backend:<commit-sha>
+ghcr.io/biraj49/opsforge-frontend:<commit-sha>
 ```
 
-The deployment flow pushes images to GHCR, then updates Kubernetes through a restart or Argo CD sync.
+The application workflow never writes to the cluster. It pushes verified images to GHCR and opens a digest-only pull request in the dedicated GitOps repository. Argo CD reconciles the merged desired state. Terraform validation/planning, explicitly approved infrastructure applies, and external uptime checks run in separate workflows.
 
 ## GitOps And Kubernetes
 
@@ -143,7 +145,7 @@ The cluster includes:
 
 - Prometheus for metrics
 - Grafana for dashboards
-- Loki and Promtail for logs
+- Loki and Grafana Alloy for logs
 
 OpsForge also has monitoring pages for cluster metrics and workload data.
 
@@ -269,7 +271,7 @@ Main deployment resources are stored in:
 deploy/k8s/opsforge/
 ```
 
-To restart the deployed platform after pushing new images:
+Emergency restarts create runtime drift and are not a release mechanism. Normal rollback or redeployment is a reviewed Git revert or digest change in the GitOps repository. If an operator performs an emergency restart, record it and verify that Argo CD returns the application to `Synced` and `Healthy`:
 
 ```bash
 kubectl rollout restart deployment/opsforge-backend -n opsforge-system
@@ -306,7 +308,7 @@ SMTP_FROM_EMAIL
 
 - Add final screenshots for GitHub Actions, Argo CD, Kubernetes, monitoring, Trivy, incidents, healing, admin pages, and audit logs
 - Polish generated app deployment templates for every stack type
-- Make GitOps image tag updates fully automatic
+- Create and protect the dedicated GitOps repository, then enable digest promotion PRs
 - Add deeper Grafana/Loki embeds or links inside OpsForge
 - Add cloud cost visibility later
 - Record final demo video

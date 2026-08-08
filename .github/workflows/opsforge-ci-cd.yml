@@ -1,40 +1,148 @@
-name: OpsForge CI/CD
+name: OpsForge application CI/CD
 
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "30 0 * * 1"
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: opsforge-production
-  cancel-in-progress: false
+  group: opsforge-application-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   REGISTRY: ghcr.io
   BACKEND_IMAGE: ghcr.io/biraj49/opsforge-backend
   FRONTEND_IMAGE: ghcr.io/biraj49/opsforge-frontend
-  TF_IN_AUTOMATION: "true"
-  TF_INPUT: "false"
-  TF_VAR_aws_region: ${{ vars.AWS_REGION }}
-  TF_VAR_domain_name: ${{ vars.OPSFORGE_DOMAIN }}
-  TF_VAR_grafana_domain_name: ${{ vars.GRAFANA_DOMAIN }}
-  TF_VAR_argocd_domain_name: ${{ vars.ARGOCD_DOMAIN }}
-  TF_VAR_cloudflare_zone_id: ${{ vars.CLOUDFLARE_ZONE_ID }}
-  TF_VAR_cloudflare_account_id: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-  TF_VAR_cloudflare_access_email: ${{ vars.CLOUDFLARE_ACCESS_EMAIL }}
-  TF_VAR_cloudflare_github_idp_id: ${{ vars.CLOUDFLARE_GITHUB_IDP_ID }}
-  TF_VAR_enable_admin_access: ${{ vars.ENABLE_ADMIN_ACCESS || 'false' }}
-  TF_VAR_ssh_allowed_cidr: ${{ vars.SSH_ALLOWED_CIDR }}
-  TF_VAR_ssh_public_key: ${{ vars.SSH_PUBLIC_KEY }}
-  TF_VAR_budget_alert_email: ${{ vars.BUDGET_ALERT_EMAIL }}
-  CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
 
 jobs:
+  backend:
+    name: Backend quality
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      APP_ENV: test
+      DATABASE_URL: postgresql://opsforge:opsforge-ci-password@localhost:5432/opsforge_test
+      JWT_SECRET_KEY: opsforge-ci-secret-at-least-32-bytes
+      ADMIN_PASSWORD: admin-password-123
+    services:
+      postgres:
+        image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+        env:
+          POSTGRES_DB: opsforge_test
+          POSTGRES_USER: opsforge
+          POSTGRES_PASSWORD: opsforge-ci-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U opsforge -d opsforge_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
+      - name: Install dependencies
+        working-directory: backend
+        run: python -m pip install --disable-pip-version-check -r requirements-dev.txt
+      - name: Verify dependency compatibility
+        working-directory: backend
+        run: python -m pip check
+      - name: Lint backend
+        working-directory: backend
+        run: python -m ruff check app alembic
+      - name: Audit production dependencies
+        working-directory: backend
+        run: python -m pip_audit --strict -r requirements.txt
+      - name: Verify PostgreSQL migrations
+        working-directory: backend
+        run: |
+          python -m alembic upgrade head
+          python -m alembic check
+      - name: Run tests
+        working-directory: backend
+        run: python -m pytest -q
+
+  frontend:
+    name: Frontend quality
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install locked dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: Audit production dependencies
+        working-directory: frontend
+        run: npm run audit:ci
+      - name: Lint
+        working-directory: frontend
+        run: npm run lint
+      - name: Build
+        working-directory: frontend
+        run: npm run build
+
+  configuration:
+    name: Configuration quality
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Lint GitHub Actions
+        run: |
+          docker run --rm \
+            --volume "$GITHUB_WORKSPACE:/repo" \
+            --workdir /repo \
+            docker.io/rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 \
+            -color
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4
+        with:
+          terraform_version: 1.15.8
+          terraform_wrapper: false
+      - name: Validate Terraform without production credentials
+        run: |
+          terraform -chdir=infra/terraform fmt -check -diff
+          terraform -chdir=infra/terraform init -backend=false -input=false -lockfile=readonly
+          terraform -chdir=infra/terraform validate
+      - name: Render Kubernetes manifests
+        run: |
+          kubectl kustomize deploy/k8s >/tmp/opsforge-applications.yaml
+          kubectl kustomize deploy/k8s/opsforge >/tmp/opsforge-workloads.yaml
+          grep -Fq "name: opsforge-backend" /tmp/opsforge-workloads.yaml
+          grep -Fq "name: opsforge-frontend" /tmp/opsforge-workloads.yaml
+          grep -Fq "path: deploy/k8s/platform-access" deploy/k8s/applications/platform-access.yaml
+      - name: Validate Compose configuration
+        run: |
+          cp backend/.env.example backend/.env
+          docker compose config --quiet
+
   codeql:
     name: CodeQL (${{ matrix.language }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     permissions:
       contents: read
       packages: read
@@ -45,6 +153,8 @@ jobs:
         language: [python, javascript-typescript]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - uses: github/codeql-action/init@24c7eb380a2dc368f2d129e4c65e51d172983a1e # v4
         with:
           languages: ${{ matrix.language }}
@@ -54,68 +164,73 @@ jobs:
           category: /language:${{ matrix.language }}
 
   infrastructure-scan:
-    name: IaC and manifest security
-    needs: codeql
-    runs-on: ubuntu-latest
+    name: IaC and secret policy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     permissions:
       contents: read
       security-events: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - name: Generate SARIF report
         uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
         with:
           scan-type: fs
           scan-ref: .
-          scanners: misconfig
+          scanners: misconfig,secret
+          skip-dirs: infra/terraform/.terraform
+          skip-files: infra/terraform/tfplan*,infra/terraform/terraform.tfstate
           trivyignores: .trivyignore.yaml
           severity: HIGH,CRITICAL
           format: sarif
-          output: trivy-iac.sarif
+          output: trivy-policy.sarif
           exit-code: 0
-      - uses: github/codeql-action/upload-sarif@24c7eb380a2dc368f2d129e4c65e51d172983a1e # v4
+      - name: Upload SARIF report
+        if: always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        uses: github/codeql-action/upload-sarif@24c7eb380a2dc368f2d129e4c65e51d172983a1e # v4
         with:
-          sarif_file: trivy-iac.sarif
-          category: trivy-iac
+          sarif_file: trivy-policy.sarif
+          category: trivy-policy
       - name: Enforce policy
         uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
         with:
           scan-type: fs
           scan-ref: .
-          scanners: misconfig
+          scanners: misconfig,secret
+          skip-dirs: infra/terraform/.terraform
+          skip-files: infra/terraform/tfplan*,infra/terraform/terraform.tfstate
           trivyignores: .trivyignore.yaml
           severity: HIGH,CRITICAL
           format: table
           exit-code: 1
           skip-setup-trivy: true
 
-  images:
-    name: Build, scan, sign, and publish images
-    needs: infrastructure-scan
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-      id-token: write
-      attestations: write
-      security-events: write
-    outputs:
-      backend_digest: ${{ steps.publish.outputs.backend_digest }}
-      frontend_digest: ${{ steps.publish.outputs.frontend_digest }}
+  container-check:
+    name: Container build and scan
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    needs: [backend, frontend, configuration, codeql, infrastructure-scan]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
-      - name: Build images locally
+      - name: Build images without publishing
         run: |
           docker buildx build --load --platform linux/amd64 \
+            --cache-from type=gha,scope=backend \
             --tag "$BACKEND_IMAGE:$GITHUB_SHA" ./backend
           docker buildx build --load --platform linux/amd64 \
+            --cache-from type=gha,scope=frontend \
             --tag "$FRONTEND_IMAGE:$GITHUB_SHA" ./frontend
       - name: Scan backend image
         uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
         with:
           image-ref: ${{ env.BACKEND_IMAGE }}:${{ github.sha }}
-          severity: CRITICAL
+          severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: 1
           scanners: vuln
@@ -123,19 +238,78 @@ jobs:
         uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
         with:
           image-ref: ${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
-          severity: CRITICAL
+          severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: 1
           scanners: vuln
           skip-setup-trivy: true
-      - name: Generate SBOMs
+
+  images:
+    name: Publish and attest images
+    if: github.event_name == 'push'
+    needs: [backend, frontend, configuration, codeql, infrastructure-scan]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    outputs:
+      backend_digest: ${{ steps.publish.outputs.backend_digest }}
+      frontend_digest: ${{ steps.publish.outputs.frontend_digest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+      - name: Build release images
         run: |
-          trivy image --format cyclonedx --output backend-sbom.cdx.json "$BACKEND_IMAGE:$GITHUB_SHA"
-          trivy image --format cyclonedx --output frontend-sbom.cdx.json "$FRONTEND_IMAGE:$GITHUB_SHA"
+          docker buildx build --load --platform linux/amd64 \
+            --cache-from type=gha,scope=backend \
+            --cache-to type=gha,mode=max,scope=backend \
+            --tag "$BACKEND_IMAGE:$GITHUB_SHA" ./backend
+          docker buildx build --load --platform linux/amd64 \
+            --cache-from type=gha,scope=frontend \
+            --cache-to type=gha,mode=max,scope=frontend \
+            --tag "$FRONTEND_IMAGE:$GITHUB_SHA" ./frontend
+      - name: Scan backend release image
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          image-ref: ${{ env.BACKEND_IMAGE }}:${{ github.sha }}
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: 1
+          scanners: vuln
+      - name: Scan frontend release image
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          image-ref: ${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: 1
+          scanners: vuln
+          skip-setup-trivy: true
+      - name: Generate release SBOMs
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          image-ref: ${{ env.BACKEND_IMAGE }}:${{ github.sha }}
+          format: cyclonedx
+          output: backend-sbom.cdx.json
+          scan-type: image
+          skip-setup-trivy: true
+      - name: Generate frontend SBOM
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          image-ref: ${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
+          format: cyclonedx
+          output: frontend-sbom.cdx.json
+          scan-type: image
+          skip-setup-trivy: true
       - name: Login to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
-          registry: ghcr.io
+          registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Publish immutable images
@@ -174,68 +348,84 @@ jobs:
           sbom-path: frontend-sbom.cdx.json
           push-to-registry: true
 
-  terraform-plan:
-    name: Terraform plan
+  promote:
+    name: Open GitOps promotion PR
+    if: github.event_name == 'push' && vars.ENABLE_GITOPS_PROMOTION == 'true'
     needs: images
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     permissions:
       contents: read
-      id-token: write
+    env:
+      GITOPS_OWNER: ${{ vars.GITOPS_OWNER || github.repository_owner }}
+      GITOPS_REPOSITORY: ${{ vars.GITOPS_REPOSITORY || 'OpsForge-GitOps' }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Configure read-only AWS credentials
-        uses: aws-actions/configure-aws-credentials@cabfdba3510de1431bac9dba27511d97497fc100 # v5
+      - name: Create repository-scoped GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
         with:
-          role-to-assume: ${{ vars.AWS_TERRAFORM_PLAN_ROLE_ARN }}
-          aws-region: ${{ vars.AWS_REGION }}
-      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4
-      - name: Validate and plan
-        run: |
-          terraform -chdir=infra/terraform fmt -check -diff
-          terraform -chdir=infra/terraform init -input=false
-          terraform -chdir=infra/terraform validate
-          terraform -chdir=infra/terraform plan -no-color -out=tfplan
-      - name: Publish plan summary
-        if: always()
-        run: |
-          {
-            echo '## Terraform production plan'
-            echo '```terraform'
-            terraform -chdir=infra/terraform show -no-color tfplan 2>&1 || true
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-
-  terraform-apply:
-    name: Terraform apply
-    needs: terraform-plan
-    runs-on: ubuntu-latest
-    environment: production
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Configure production AWS credentials
-        uses: aws-actions/configure-aws-credentials@cabfdba3510de1431bac9dba27511d97497fc100 # v5
+          client-id: ${{ secrets.GITOPS_APP_CLIENT_ID }}
+          private-key: ${{ secrets.GITOPS_APP_PRIVATE_KEY }}
+          owner: ${{ env.GITOPS_OWNER }}
+          repositories: ${{ env.GITOPS_REPOSITORY }}
+          permission-contents: write
+          permission-pull-requests: write
+      - name: Checkout trusted promotion script
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          role-to-assume: ${{ vars.AWS_TERRAFORM_APPLY_ROLE_ARN }}
-          aws-region: ${{ vars.AWS_REGION }}
-      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4
-      - name: Apply reviewed production configuration
+          persist-credentials: false
+          path: source
+      - name: Checkout GitOps repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: ${{ env.GITOPS_OWNER }}/${{ env.GITOPS_REPOSITORY }}
+          token: ${{ steps.app-token.outputs.token }}
+          path: gitops
+      - name: Update and validate production digests
+        working-directory: gitops
+        env:
+          BACKEND_DIGEST: ${{ needs.images.outputs.backend_digest }}
+          FRONTEND_DIGEST: ${{ needs.images.outputs.frontend_digest }}
         run: |
-          terraform -chdir=infra/terraform fmt -check -diff
-          terraform -chdir=infra/terraform init -input=false
-          terraform -chdir=infra/terraform validate
-          terraform -chdir=infra/terraform apply -auto-approve
-
-  uptime:
-    name: External production uptime
-    needs: terraform-apply
-    runs-on: ubuntu-latest
-    timeout-minutes: 2
-    steps:
-      - name: Verify public HTTPS health
+          python3 -m pip install --disable-pip-version-check PyYAML==6.0.3
+          python3 ../source/scripts/update-images.py \
+            --backend "$BACKEND_IMAGE@$BACKEND_DIGEST" \
+            --frontend "$FRONTEND_IMAGE@$FRONTEND_DIGEST"
+          kubectl kustomize production >/tmp/opsforge-applications.yaml
+          kubectl kustomize production/opsforge >/tmp/opsforge-workloads.yaml
+          grep -Fq "image: $BACKEND_IMAGE@$BACKEND_DIGEST" /tmp/opsforge-workloads.yaml
+          grep -Fq "image: $FRONTEND_IMAGE@$FRONTEND_DIGEST" /tmp/opsforge-workloads.yaml
+          git diff --check
+      - name: Open promotion pull request
+        working-directory: gitops
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-          curl --fail --silent --show-error \
-            --retry 3 --retry-all-errors --retry-delay 15 --max-time 20 \
-            https://opsforge.birajadhikari49.com.np/api/health
+          branch="promote/${GITHUB_SHA}"
+          repository="$GITOPS_OWNER/$GITOPS_REPOSITORY"
+          existing_pr=$(gh pr list --repo "$repository" --state open --head "$branch" --json number --jq '.[0].number // empty')
+          if [[ -n "$existing_pr" ]]; then
+            echo "Promotion PR #$existing_pr already exists."
+            exit 0
+          fi
+          git config user.name "opsforge-gitops[bot]"
+          git config user.email "opsforge-gitops[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git add production
+          if git diff --cached --quiet; then
+            echo "These image digests are already promoted."
+            exit 0
+          fi
+          git commit -m "promote: OpsForge ${GITHUB_SHA}"
+          if git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
+            git fetch --no-tags origin "refs/heads/$branch:refs/remotes/origin/$branch"
+            if ! git diff --quiet "refs/remotes/origin/$branch" HEAD; then
+              echo "Remote promotion branch exists with different content; reconcile or delete it before retrying." >&2
+              exit 1
+            fi
+          else
+            git push --set-upstream origin "$branch"
+          fi
+          gh pr create --repo "$repository" --base main --head "$branch" \
+            --title "promote: OpsForge ${GITHUB_SHA}" \
+            --body "Promotes signed backend and frontend image digests built from ${GITHUB_REPOSITORY}@${GITHUB_SHA}."

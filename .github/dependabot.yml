@@ -75,3 +75,33 @@ updates:
         update-types: ["minor", "patch"]
     commit-message:
       prefix: deps(actions)
+
+  - package-ecosystem: terraform
+    directory: /infra/terraform
+    schedule:
+      interval: weekly
+      day: monday
+      time: "07:15"
+      timezone: Asia/Kathmandu
+    open-pull-requests-limit: 3
+    groups:
+      terraform-minor-and-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+    commit-message:
+      prefix: deps(terraform)
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "07:30"
+      timezone: Asia/Kathmandu
+    open-pull-requests-limit: 3
+    groups:
+      service-image-minor-and-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+    commit-message:
+      prefix: deps(service-images)

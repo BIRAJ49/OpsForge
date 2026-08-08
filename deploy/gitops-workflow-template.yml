@@ -11,12 +11,19 @@ permissions:
   attestations: read
   packages: read
 
+concurrency:
+  group: gitops-validation-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   validate:
     name: Render and scan manifests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - name: Render production manifests
         run: |
           kubectl kustomize production > /tmp/applications.yaml
@@ -25,14 +32,29 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          awk '/image: ghcr.io\/biraj49\/opsforge-(backend|frontend)@sha256:/ {print $2}' \
-            /tmp/workloads.yaml | sort -u | while read -r image; do
-              gh attestation verify "oci://$image" --repo BIRAJ49/OpsForge
-            done
+          mapfile -t images < <(
+            grep -Eo 'ghcr\.io/biraj49/opsforge-(backend|frontend)@sha256:[0-9a-f]{64}' \
+              /tmp/workloads.yaml \
+              | sort -u
+          )
+          if [[ "${#images[@]}" -ne 2 ]]; then
+            echo "Expected exactly two unique OpsForge images, found ${#images[@]}." >&2
+            exit 1
+          fi
+          for expected in backend frontend; do
+            image=$(printf '%s\n' "${images[@]}" | grep -E "^ghcr\\.io/biraj49/opsforge-${expected}@sha256:[0-9a-f]{64}$" || true)
+            if [[ -z "$image" ]]; then
+              echo "Missing digest-pinned $expected image." >&2
+              exit 1
+            fi
+            gh attestation verify "oci://$image" --repo BIRAJ49/OpsForge
+          done
       - name: Scan Kubernetes configuration
         uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
         with:
-          scan-type: config
+          scan-type: fs
           scan-ref: production
+          scanners: misconfig,secret
+          trivyignores: .trivyignore.yaml
           severity: HIGH,CRITICAL
           exit-code: 1

@@ -8,5 +8,5 @@ misconfigurations:
   - id: KSV-0041
     paths:
       - deploy/k8s/opsforge/rbac.yaml
-    statement: OpsForge reads secret metadata across authorized namespaces and masks all values; RBAC is read-only.
-    expired_at: 2027-08-06
+    statement: Temporary exception for the legacy cluster-mutation API; production promotion stays disabled until this role is made read-only or namespace-scoped.
+    expired_at: 2026-09-30

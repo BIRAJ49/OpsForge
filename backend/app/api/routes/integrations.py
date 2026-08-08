@@ -2,9 +2,10 @@ from datetime import UTC, datetime, timedelta
 from urllib.parse import urlencode
 
 import httpx
+import jwt
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse
-from jose import JWTError, jwt
+from jwt import PyJWTError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -31,7 +32,7 @@ def _github_oauth_state(user_id: int) -> str:
 def _decode_github_oauth_state(state: str) -> int:
     try:
         payload = jwt.decode(state, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
-    except JWTError as exc:
+    except PyJWTError as exc:
         raise HTTPException(status_code=400, detail="Invalid GitHub OAuth state") from exc
     if payload.get("type") != "github_oauth_state":
         raise HTTPException(status_code=400, detail="Invalid GitHub OAuth state")
@@ -46,7 +47,7 @@ def list_all(db: Session = Depends(get_db), current_user=Depends(get_current_use
 def _connect(provider: str, payload: IntegrationConnect, request: Request, db: Session, admin):
     secret = payload.token or payload.password
     config = payload.model_dump(exclude={"token", "password"}, exclude_none=True)
-    integration = upsert_platform_integration(db, provider, secret, config, admin)
+    upsert_platform_integration(db, provider, secret, config, admin)
     ip, ua = request_meta(request)
     record_audit(db, user_id=admin.id, action="Integration update", resource_type="integration", resource_id=provider, ip_address=ip, user_agent=ua)
     if provider == "github":

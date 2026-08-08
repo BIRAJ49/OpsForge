@@ -3,11 +3,12 @@
 ## Safe Rollout Order
 
 1. Apply Terraform with `enable_ssh_access = true`. Keep `enable_admin_access = false` until Cloudflare Access is available; Grafana and Argo CD remain private.
-2. Open an SSM session with the `ssm_start_session_command` Terraform output. Confirm `kubectl get nodes` works.
+2. Open an SSM session with the `ssm_command` Terraform output. Confirm `kubectl get nodes` works.
 3. Back up the Sealed Secrets key before adopting the controller into Argo CD.
-4. Create and validate `OpsForge-GitOps`, then apply `deploy/bootstrap/argocd-root-gitops.yaml` once.
-5. Verify all Argo applications, ingresses, certificates, alerts, and NetworkPolicies.
-6. Set `enable_ssh_access = false`, review the Terraform plan, and apply it. Confirm port 22 is absent from the security group.
+4. Create and validate `OpsForge-GitOps` with `scripts/bootstrap-gitops-repository.sh` and two verified image digest references, then apply `deploy/bootstrap/argocd-root-gitops.yaml` once.
+5. Verify the internal Argo applications, OpsForge ingress/certificate, alerts, and NetworkPolicies. The production root intentionally excludes `applications/platform-access.yaml` at this point.
+6. When Cloudflare Access is ready, apply a reviewed Terraform change with `enable_admin_access = true`; then use a reviewed GitOps change to add `applications/platform-access.yaml` to the production root. Verify Access before advertising either admin URL.
+7. Set `enable_ssh_access = false`, review the Terraform plan, and apply it. Confirm port 22 is absent from the security group.
 
 Do not switch the root application before the dedicated repository exists. Do not remove SSH before a working SSM session is verified.
 

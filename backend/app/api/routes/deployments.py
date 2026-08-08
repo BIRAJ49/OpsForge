@@ -6,7 +6,6 @@ from app.core.database import get_db
 from app.core.permissions import get_current_user, project_for_user, request_meta
 from app.core.response import success_response
 from app.models.deployment import Deployment
-from app.models.user import UserRole
 from app.schemas.deployment import DeployRequest, DeploymentOut, ScaleRequest
 from app.services.audit_service import record_audit
 from app.services.deployment_service import action_response, deploy
