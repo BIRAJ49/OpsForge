@@ -321,10 +321,11 @@ If `ARGOCD_SERVER` and `ARGOCD_TOKEN` are not configured, Argo CD endpoints retu
 
 ## Trivy Setup
 
-Production images do not contain a scanner, and the GitHub Actions deployment
-workflow does not run Trivy or other automated scans. This keeps a large
-security tool and its transitive dependencies out of the internet-facing API
-image.
+Production images do not contain a scanner. Release dependency, source, secret,
+IaC, and exact-image scans run in the centralized `Security gate` in GitHub
+Actions, and every publish, attestation, and promotion job depends on that gate.
+This keeps a large security tool and its transitive dependencies out of the
+internet-facing API image.
 
 The synchronous scan endpoint is disabled by default:
 
