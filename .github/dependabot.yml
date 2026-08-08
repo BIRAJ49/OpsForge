@@ -3,18 +3,29 @@ version: 2
 updates:
   - package-ecosystem: npm
     directory: /frontend
+    versioning-strategy: lockfile-only
     schedule:
       interval: weekly
       day: monday
       time: "06:00"
       timezone: Asia/Kathmandu
-    open-pull-requests-limit: 3
+    open-pull-requests-limit: 1
     groups:
       frontend-minor-and-patch:
         patterns: ["*"]
         update-types: ["minor", "patch"]
+        applies-to: version-updates
+      frontend-security:
+        applies-to: security-updates
+        patterns: ["*"]
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - version-update:semver-major
     commit-message:
       prefix: deps(frontend)
+    cooldown:
+      default-days: 7
 
   - package-ecosystem: pip
     directory: /backend
@@ -23,13 +34,27 @@ updates:
       day: monday
       time: "06:15"
       timezone: Asia/Kathmandu
-    open-pull-requests-limit: 3
+    open-pull-requests-limit: 1
     groups:
       backend-minor-and-patch:
         patterns: ["*"]
         update-types: ["minor", "patch"]
+        applies-to: version-updates
+      backend-security:
+        applies-to: security-updates
+        patterns: ["*"]
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - version-update:semver-major
+      - dependency-name: ruff
+        update-types:
+          - version-update:semver-major
+          - version-update:semver-minor
     commit-message:
       prefix: deps(backend)
+    cooldown:
+      default-days: 7
 
   - package-ecosystem: docker
     directory: /frontend
@@ -38,13 +63,27 @@ updates:
       day: monday
       time: "06:30"
       timezone: Asia/Kathmandu
-    open-pull-requests-limit: 3
+    open-pull-requests-limit: 1
     groups:
-      frontend-image-minor-and-patch:
+      frontend-images:
         patterns: ["*"]
-        update-types: ["minor", "patch"]
+        applies-to: version-updates
+      frontend-image-security:
+        patterns: ["*"]
+        applies-to: security-updates
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - version-update:semver-major
+          - version-update:semver-minor
+      - dependency-name: node
+        versions: [">= 23"]
+      - dependency-name: nginx
+        versions: [">= 1.31"]
     commit-message:
       prefix: deps(frontend-image)
+    cooldown:
+      default-days: 7
 
   - package-ecosystem: docker
     directory: /backend
@@ -53,13 +92,25 @@ updates:
       day: monday
       time: "06:45"
       timezone: Asia/Kathmandu
-    open-pull-requests-limit: 3
+    open-pull-requests-limit: 1
     groups:
-      backend-image-minor-and-patch:
+      backend-images:
         patterns: ["*"]
-        update-types: ["minor", "patch"]
+        applies-to: version-updates
+      backend-image-security:
+        patterns: ["*"]
+        applies-to: security-updates
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - version-update:semver-major
+          - version-update:semver-minor
+      - dependency-name: python
+        versions: [">= 3.13"]
     commit-message:
       prefix: deps(backend-image)
+    cooldown:
+      default-days: 7
 
   - package-ecosystem: github-actions
     directory: /
@@ -68,13 +119,22 @@ updates:
       day: monday
       time: "07:00"
       timezone: Asia/Kathmandu
-    open-pull-requests-limit: 3
+    open-pull-requests-limit: 1
     groups:
-      actions-minor-and-patch:
+      actions:
         patterns: ["*"]
-        update-types: ["minor", "patch"]
+        applies-to: version-updates
+      actions-security:
+        patterns: ["*"]
+        applies-to: security-updates
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - version-update:semver-major
     commit-message:
       prefix: deps(actions)
+    cooldown:
+      default-days: 7
 
   - package-ecosystem: terraform
     directory: /infra/terraform
@@ -83,25 +143,21 @@ updates:
       day: monday
       time: "07:15"
       timezone: Asia/Kathmandu
-    open-pull-requests-limit: 3
+    open-pull-requests-limit: 1
     groups:
-      terraform-minor-and-patch:
+      terraform-patch:
         patterns: ["*"]
-        update-types: ["minor", "patch"]
+        update-types: ["patch"]
+        applies-to: version-updates
+      terraform-security:
+        patterns: ["*"]
+        applies-to: security-updates
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - version-update:semver-major
+          - version-update:semver-minor
     commit-message:
       prefix: deps(terraform)
-
-  - package-ecosystem: docker
-    directory: /
-    schedule:
-      interval: weekly
-      day: monday
-      time: "07:30"
-      timezone: Asia/Kathmandu
-    open-pull-requests-limit: 3
-    groups:
-      service-image-minor-and-patch:
-        patterns: ["*"]
-        update-types: ["minor", "patch"]
-    commit-message:
-      prefix: deps(service-images)
+    cooldown:
+      default-days: 7

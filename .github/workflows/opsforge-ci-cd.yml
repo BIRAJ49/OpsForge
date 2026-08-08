@@ -65,9 +65,6 @@ jobs:
       - name: Lint backend
         working-directory: backend
         run: python -m ruff check app alembic
-      - name: Audit production dependencies
-        working-directory: backend
-        run: python -m pip_audit --strict -r requirements.txt
       - name: Verify PostgreSQL migrations
         working-directory: backend
         run: |
@@ -93,9 +90,6 @@ jobs:
       - name: Install locked dependencies
         working-directory: frontend
         run: npm ci
-      - name: Audit production dependencies
-        working-directory: frontend
-        run: npm run audit:ci
       - name: Lint
         working-directory: frontend
         run: npm run lint
@@ -117,7 +111,7 @@ jobs:
             --volume "$GITHUB_WORKSPACE:/repo" \
             --workdir /repo \
             docker.io/rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 \
-            -color
+            -color .github/workflows/*.yml deploy/gitops-workflow-template.yml
       - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4
         with:
           terraform_version: 1.15.8
@@ -139,43 +133,186 @@ jobs:
           cp backend/.env.example backend/.env
           docker compose config --quiet
 
-  codeql:
-    name: CodeQL (${{ matrix.language }})
+  build_images:
+    name: Build immutable images
+    needs: [backend, frontend, configuration]
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 30
     permissions:
       contents: read
-      packages: read
-      security-events: write
-    strategy:
-      fail-fast: false
-      matrix:
-        language: [python, javascript-typescript]
+    outputs:
+      artifact_id: ${{ steps.artifact.outputs.artifact-id }}
+      artifact_digest: ${{ steps.artifact.outputs.artifact-digest }}
+      backend_sha256: ${{ steps.hashes.outputs.backend_sha256 }}
+      frontend_sha256: ${{ steps.hashes.outputs.frontend_sha256 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - uses: github/codeql-action/init@24c7eb380a2dc368f2d129e4c65e51d172983a1e # v4
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+      - name: Build each image exactly once
+        run: |
+          mkdir -p release-images
+          backend_cache=()
+          frontend_cache=()
+          if [[ "$GITHUB_EVENT_NAME" != "pull_request" ]]; then
+            backend_cache=(--cache-to "type=gha,mode=max,scope=backend")
+            frontend_cache=(--cache-to "type=gha,mode=max,scope=frontend")
+          fi
+          docker buildx build --pull --platform linux/amd64 --provenance=false \
+            --cache-from type=gha,scope=backend \
+            "${backend_cache[@]}" \
+            --tag "$BACKEND_IMAGE:$GITHUB_SHA" \
+            --output type=docker,dest=release-images/backend-image.tar \
+            ./backend
+          docker buildx build --pull --platform linux/amd64 --provenance=false \
+            --cache-from type=gha,scope=frontend \
+            "${frontend_cache[@]}" \
+            --tag "$FRONTEND_IMAGE:$GITHUB_SHA" \
+            --output type=docker,dest=release-images/frontend-image.tar \
+            ./frontend
+      - name: Record image archive hashes
+        id: hashes
+        run: |
+          cd release-images
+          sha256sum backend-image.tar frontend-image.tar > SHA256SUMS
+          echo "backend_sha256=$(sha256sum backend-image.tar | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+          echo "frontend_sha256=$(sha256sum frontend-image.tar | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+          sha256sum --check SHA256SUMS
+      - name: Upload immutable image archives
+        id: artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          languages: ${{ matrix.language }}
-          build-mode: none
-      - uses: github/codeql-action/analyze@24c7eb380a2dc368f2d129e4c65e51d172983a1e # v4
-        with:
-          category: /language:${{ matrix.language }}
+          name: release-images-${{ github.run_id }}-${{ github.run_attempt }}
+          path: release-images/
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+          overwrite: false
 
-  infrastructure-scan:
-    name: IaC and secret policy
+  security_gate:
+    name: Security gate
+    if: always()
+    needs: [backend, frontend, configuration, build_images]
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 45
     permissions:
       contents: read
-      security-events: write
+      security-events: write # Upload CodeQL and Trivy SARIF from this unprivileged gate.
+    outputs:
+      evidence_artifact_id: ${{ steps.evidence.outputs.artifact-id }}
+      evidence_artifact_digest: ${{ steps.evidence.outputs.artifact-digest }}
     steps:
+      - name: Require successful quality and build jobs
+        env:
+          BACKEND_RESULT: ${{ needs.backend.result }}
+          FRONTEND_RESULT: ${{ needs.frontend.result }}
+          CONFIGURATION_RESULT: ${{ needs.configuration.result }}
+          BUILD_RESULT: ${{ needs.build_images.result }}
+        run: |
+          for result in "$BACKEND_RESULT" "$FRONTEND_RESULT" "$CONFIGURATION_RESULT" "$BUILD_RESULT"; do
+            if [[ "$result" != "success" ]]; then
+              echo "A required prerequisite did not succeed." >&2
+              exit 1
+            fi
+          done
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - name: Generate SARIF report
-        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+      - name: Initialize CodeQL for both application languages
+        id: codeql_init
+        continue-on-error: true
+        uses: github/codeql-action/init@5595ccaf912efad79be6eef63a5619ff05969be3 # v4
+        with:
+          languages: python,javascript-typescript
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "22"
+      - name: Install the Python dependency scanner
+        run: python -m pip install --disable-pip-version-check pip-audit==2.10.1
+      - name: Audit backend production dependencies
+        id: backend_dependencies
+        continue-on-error: true
+        run: python -m pip_audit --strict -r backend/requirements.txt
+      - name: Audit frontend production dependencies
+        id: frontend_dependencies
+        continue-on-error: true
+        working-directory: frontend
+        run: npm run audit:ci
+      - name: Audit GitHub Actions and Dependabot policy
+        id: workflow_security
+        continue-on-error: true
+        uses: zizmorcore/zizmor-action@3dc1ecc9bcb9e94e9b2c709687979e1298497054 # v0.6.2
+        with:
+          inputs: .github/workflows deploy/gitops-workflow-template.yml .github/dependabot.yml
+          persona: pedantic
+          version: 1.29.0
+          advanced-security: false
+          annotations: true
+      - name: Analyze source with CodeQL
+        id: codeql_analyze
+        continue-on-error: true
+        uses: github/codeql-action/analyze@5595ccaf912efad79be6eef63a5619ff05969be3 # v4
+        with:
+          category: /security-gate
+          output: codeql-results
+          upload: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'never' || 'always' }}
+      - name: Enforce high and critical CodeQL findings
+        id: codeql_policy
+        continue-on-error: true
+        env:
+          CODEQL_SARIF_DIRECTORY: ${{ steps.codeql_analyze.outputs.sarif-output }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["CODEQL_SARIF_DIRECTORY"])
+          files = sorted(root.rglob("*.sarif"))
+          if not files:
+              raise SystemExit("CodeQL produced no SARIF files")
+
+          blocked = []
+          for path in files:
+              document = json.loads(path.read_text())
+              for run in document.get("runs", []):
+                  tool = run.get("tool", {})
+                  driver_rules = tool.get("driver", {}).get("rules", [])
+                  rules_by_id = {rule.get("id"): rule for rule in driver_rules}
+                  for extension in tool.get("extensions", []):
+                      rules_by_id.update(
+                          {rule.get("id"): rule for rule in extension.get("rules", [])}
+                      )
+                  for result in run.get("results", []):
+                      rule = rules_by_id.get(result.get("ruleId"), {})
+                      index = result.get("ruleIndex")
+                      if not rule and isinstance(index, int) and index < len(driver_rules):
+                          rule = driver_rules[index]
+                      properties = rule.get("properties", {})
+                      raw_score = properties.get("security-severity")
+                      try:
+                          score = float(raw_score)
+                      except (TypeError, ValueError):
+                          score = 0.0
+                      level = result.get("level") or rule.get("defaultConfiguration", {}).get("level", "")
+                      if score >= 7.0 or level == "error":
+                          message = result.get("message", {}).get("text", "CodeQL finding")
+                          blocked.append((result.get("ruleId", "unknown"), score, level, message))
+
+          if blocked:
+              for rule_id, score, level, message in blocked:
+                  print(f"BLOCKED {rule_id}: score={score:g} level={level} - {message}")
+              raise SystemExit(f"Blocked {len(blocked)} high/critical CodeQL finding(s)")
+          print("No high or critical CodeQL findings detected.")
+          PY
+      - name: Generate IaC and secret SARIF
+        id: repository_policy_report
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: fs
           scan-ref: .
@@ -186,15 +323,20 @@ jobs:
           severity: HIGH,CRITICAL
           format: sarif
           output: trivy-policy.sarif
+          limit-severities-for-sarif: true
           exit-code: 0
-      - name: Upload SARIF report
-        if: always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
-        uses: github/codeql-action/upload-sarif@24c7eb380a2dc368f2d129e4c65e51d172983a1e # v4
+      - name: Upload IaC and secret SARIF
+        id: repository_policy_upload
+        if: steps.repository_policy_report.outcome == 'success' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3 # v4
         with:
           sarif_file: trivy-policy.sarif
           category: trivy-policy
-      - name: Enforce policy
-        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+      - name: Enforce IaC and secret policy
+        id: repository_policy
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: fs
           scan-ref: .
@@ -206,106 +348,355 @@ jobs:
           format: table
           exit-code: 1
           skip-setup-trivy: true
-
-  container-check:
-    name: Container build and scan
-    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
-    needs: [backend, frontend, configuration, codeql, infrastructure-scan]
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Download the exact image archives
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          persist-credentials: false
-      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
-      - name: Build images without publishing
+          artifact-ids: ${{ needs.build_images.outputs.artifact_id }}
+          path: release-images
+          digest-mismatch: error
+      - name: Verify image archive integrity
+        env:
+          EXPECTED_BACKEND_SHA256: ${{ needs.build_images.outputs.backend_sha256 }}
+          EXPECTED_FRONTEND_SHA256: ${{ needs.build_images.outputs.frontend_sha256 }}
         run: |
-          docker buildx build --load --platform linux/amd64 \
-            --cache-from type=gha,scope=backend \
-            --tag "$BACKEND_IMAGE:$GITHUB_SHA" ./backend
-          docker buildx build --load --platform linux/amd64 \
-            --cache-from type=gha,scope=frontend \
-            --tag "$FRONTEND_IMAGE:$GITHUB_SHA" ./frontend
-      - name: Scan backend image
-        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+          cd release-images
+          sha256sum --check SHA256SUMS
+          [[ "$(sha256sum backend-image.tar | cut -d ' ' -f 1)" == "$EXPECTED_BACKEND_SHA256" ]]
+          [[ "$(sha256sum frontend-image.tar | cut -d ' ' -f 1)" == "$EXPECTED_FRONTEND_SHA256" ]]
+      - name: Scan backend image archive
+        id: backend_image_report
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: ${{ env.BACKEND_IMAGE }}:${{ github.sha }}
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
-          exit-code: 1
+          scan-type: image
+          input: release-images/backend-image.tar
           scanners: vuln
-      - name: Scan frontend image
-        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
-        with:
-          image-ref: ${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
+          trivyignores: .trivyignore.yaml
           severity: HIGH,CRITICAL
-          ignore-unfixed: true
-          exit-code: 1
-          scanners: vuln
+          format: json
+          output: backend-vulnerabilities.json
+          exit-code: 0
           skip-setup-trivy: true
+      - name: Scan frontend image archive
+        id: frontend_image_report
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          input: release-images/frontend-image.tar
+          scanners: vuln
+          trivyignores: .trivyignore.yaml
+          severity: HIGH,CRITICAL
+          format: json
+          output: frontend-vulnerabilities.json
+          exit-code: 0
+          skip-setup-trivy: true
+      - name: Convert container reports to SARIF
+        id: container_sarif
+        continue-on-error: true
+        run: |
+          trivy convert --format sarif --severity HIGH,CRITICAL \
+            --output trivy-backend.sarif backend-vulnerabilities.json
+          trivy convert --format sarif --severity HIGH,CRITICAL \
+            --output trivy-frontend.sarif frontend-vulnerabilities.json
+      - name: Upload backend container SARIF
+        id: backend_image_upload
+        if: steps.container_sarif.outcome == 'success' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3 # v4
+        with:
+          sarif_file: trivy-backend.sarif
+          category: trivy-backend
+      - name: Upload frontend container SARIF
+        id: frontend_image_upload
+        if: steps.container_sarif.outcome == 'success' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3 # v4
+        with:
+          sarif_file: trivy-frontend.sarif
+          category: trivy-frontend
+      - name: Enforce container vulnerability policy
+        id: container_policy
+        continue-on-error: true
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
 
-  images:
-    name: Publish and attest images
-    if: github.event_name == 'push'
-    needs: [backend, frontend, configuration, codeql, infrastructure-scan]
+          blocked = []
+          for report_name in ("backend-vulnerabilities.json", "frontend-vulnerabilities.json"):
+              report = json.loads(Path(report_name).read_text())
+              for result in report.get("Results", []):
+                  for vulnerability in result.get("Vulnerabilities") or []:
+                      severity = vulnerability.get("Severity", "UNKNOWN")
+                      fixed = bool(vulnerability.get("FixedVersion"))
+                      if severity == "CRITICAL" or (severity == "HIGH" and fixed):
+                          blocked.append(
+                              (
+                                  report_name,
+                                  vulnerability.get("VulnerabilityID", "unknown"),
+                                  vulnerability.get("PkgName", "unknown"),
+                                  severity,
+                                  vulnerability.get("FixedVersion") or "unfixed",
+                              )
+                          )
+
+          if blocked:
+              for report, identifier, package, severity, fixed_version in blocked:
+                  print(f"BLOCKED {report}: {identifier} {package} {severity} fixed={fixed_version}")
+              raise SystemExit(f"Blocked {len(blocked)} container vulnerability finding(s)")
+          print("No critical or fixable high container vulnerabilities detected.")
+          PY
+      - name: Generate backend CycloneDX SBOM
+        id: backend_sbom
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          input: release-images/backend-image.tar
+          format: cyclonedx
+          output: backend-sbom.cdx.json
+          skip-setup-trivy: true
+      - name: Generate frontend CycloneDX SBOM
+        id: frontend_sbom
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          input: release-images/frontend-image.tar
+          format: cyclonedx
+          output: frontend-sbom.cdx.json
+          skip-setup-trivy: true
+      - name: Validate generated SBOMs
+        id: validate_sboms
+        continue-on-error: true
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          for name in ("backend-sbom.cdx.json", "frontend-sbom.cdx.json"):
+              document = json.loads(Path(name).read_text())
+              if document.get("bomFormat") != "CycloneDX":
+                  raise SystemExit(f"{name} is not a CycloneDX SBOM")
+              if not document.get("components"):
+                  raise SystemExit(f"{name} contains no components")
+              print(f"Validated {name} with {len(document['components'])} components")
+          PY
+      - name: Enforce centralized security gate
+        id: enforce
+        if: always()
+        env:
+          CODEQL_INIT: ${{ steps.codeql_init.outcome }}
+          BACKEND_DEPENDENCIES: ${{ steps.backend_dependencies.outcome }}
+          FRONTEND_DEPENDENCIES: ${{ steps.frontend_dependencies.outcome }}
+          WORKFLOW_SECURITY: ${{ steps.workflow_security.outcome }}
+          CODEQL_ANALYZE: ${{ steps.codeql_analyze.outcome }}
+          CODEQL_POLICY: ${{ steps.codeql_policy.outcome }}
+          REPOSITORY_POLICY_REPORT: ${{ steps.repository_policy_report.outcome }}
+          REPOSITORY_POLICY_UPLOAD: ${{ steps.repository_policy_upload.outcome }}
+          REPOSITORY_POLICY: ${{ steps.repository_policy.outcome }}
+          BACKEND_IMAGE_REPORT: ${{ steps.backend_image_report.outcome }}
+          FRONTEND_IMAGE_REPORT: ${{ steps.frontend_image_report.outcome }}
+          CONTAINER_SARIF: ${{ steps.container_sarif.outcome }}
+          BACKEND_IMAGE_UPLOAD: ${{ steps.backend_image_upload.outcome }}
+          FRONTEND_IMAGE_UPLOAD: ${{ steps.frontend_image_upload.outcome }}
+          CONTAINER_POLICY: ${{ steps.container_policy.outcome }}
+          BACKEND_SBOM: ${{ steps.backend_sbom.outcome }}
+          FRONTEND_SBOM: ${{ steps.frontend_sbom.outcome }}
+          VALIDATE_SBOMS: ${{ steps.validate_sboms.outcome }}
+          SARIF_REQUIRED: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+        run: |
+          failures=0
+          check_result() {
+            local label="$1"
+            local result="$2"
+            if [[ "$result" == "success" ]]; then
+              echo "- :white_check_mark: $label" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "- :x: $label ($result)" >> "$GITHUB_STEP_SUMMARY"
+              failures=$((failures + 1))
+            fi
+          }
+          echo "### Centralized security gate" >> "$GITHUB_STEP_SUMMARY"
+          check_result "CodeQL initialization" "$CODEQL_INIT"
+          check_result "Backend dependency audit" "$BACKEND_DEPENDENCIES"
+          check_result "Frontend dependency audit" "$FRONTEND_DEPENDENCIES"
+          check_result "GitHub Actions security audit" "$WORKFLOW_SECURITY"
+          check_result "CodeQL analysis" "$CODEQL_ANALYZE"
+          check_result "CodeQL severity policy" "$CODEQL_POLICY"
+          check_result "IaC and secret report" "$REPOSITORY_POLICY_REPORT"
+          check_result "IaC and secret enforcement" "$REPOSITORY_POLICY"
+          check_result "Backend image scan" "$BACKEND_IMAGE_REPORT"
+          check_result "Frontend image scan" "$FRONTEND_IMAGE_REPORT"
+          check_result "Container SARIF generation" "$CONTAINER_SARIF"
+          check_result "Container vulnerability policy" "$CONTAINER_POLICY"
+          check_result "Backend SBOM" "$BACKEND_SBOM"
+          check_result "Frontend SBOM" "$FRONTEND_SBOM"
+          check_result "SBOM validation" "$VALIDATE_SBOMS"
+          if [[ "$SARIF_REQUIRED" == "true" ]]; then
+            check_result "IaC and secret SARIF upload" "$REPOSITORY_POLICY_UPLOAD"
+            check_result "Backend container SARIF upload" "$BACKEND_IMAGE_UPLOAD"
+            check_result "Frontend container SARIF upload" "$FRONTEND_IMAGE_UPLOAD"
+          fi
+          if (( failures > 0 )); then
+            echo "$failures mandatory security control(s) did not succeed." >&2
+            exit 1
+          fi
+      - name: Create approved release evidence
+        env:
+          IMAGE_ARTIFACT_ID: ${{ needs.build_images.outputs.artifact_id }}
+          IMAGE_ARTIFACT_DIGEST: ${{ needs.build_images.outputs.artifact_digest }}
+          BACKEND_SHA256: ${{ needs.build_images.outputs.backend_sha256 }}
+          FRONTEND_SHA256: ${{ needs.build_images.outputs.frontend_sha256 }}
+        run: |
+          mkdir -p security-evidence
+          cp backend-sbom.cdx.json frontend-sbom.cdx.json security-evidence/
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          def sha256(path):
+              digest = hashlib.sha256()
+              with Path(path).open("rb") as stream:
+                  for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                      digest.update(chunk)
+              return digest.hexdigest()
+
+          approval = {
+              "schema": 1,
+              "repository": os.environ["GITHUB_REPOSITORY"],
+              "commit": os.environ["GITHUB_SHA"],
+              "run_id": os.environ["GITHUB_RUN_ID"],
+              "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
+              "image_artifact": {
+                  "id": os.environ["IMAGE_ARTIFACT_ID"],
+                  "digest": os.environ["IMAGE_ARTIFACT_DIGEST"],
+              },
+              "images": {
+                  "backend": {"archive_sha256": os.environ["BACKEND_SHA256"]},
+                  "frontend": {"archive_sha256": os.environ["FRONTEND_SHA256"]},
+              },
+              "sboms": {
+                  "backend": {"sha256": sha256("security-evidence/backend-sbom.cdx.json")},
+                  "frontend": {"sha256": sha256("security-evidence/frontend-sbom.cdx.json")},
+              },
+              "policy": {
+                  "codeql_minimum_security_severity": 7.0,
+                  "containers": "all critical and all fixable high vulnerabilities",
+              },
+          }
+          Path("security-evidence/approval.json").write_text(
+              json.dumps(approval, indent=2, sort_keys=True) + "\n"
+          )
+          PY
+      - name: Upload approved release evidence
+        id: evidence
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: security-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: security-evidence/
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 6
+          overwrite: false
+
+  release:
+    name: Publish and attest approved images
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.security_gate.result == 'success'
+    needs: [build_images, security_gate]
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 20
     permissions:
       contents: read
-      packages: write
-      id-token: write
-      attestations: write
+      packages: write # Push the approved images to GHCR.
+      id-token: write # Obtain the OIDC identity used to sign attestations.
+      attestations: write # Store provenance and SBOM attestations.
     outputs:
       backend_digest: ${{ steps.publish.outputs.backend_digest }}
       frontend_digest: ${{ steps.publish.outputs.frontend_digest }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Download approved image archives
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          persist-credentials: false
-      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
-      - name: Build release images
+          artifact-ids: ${{ needs.build_images.outputs.artifact_id }}
+          path: release-images
+          digest-mismatch: error
+      - name: Download security evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.security_gate.outputs.evidence_artifact_id }}
+          path: security-evidence
+          digest-mismatch: error
+      - name: Verify security approval and artifact hashes
+        env:
+          EXPECTED_IMAGE_ARTIFACT_ID: ${{ needs.build_images.outputs.artifact_id }}
+          EXPECTED_IMAGE_ARTIFACT_DIGEST: ${{ needs.build_images.outputs.artifact_digest }}
+          EXPECTED_BACKEND_SHA256: ${{ needs.build_images.outputs.backend_sha256 }}
+          EXPECTED_FRONTEND_SHA256: ${{ needs.build_images.outputs.frontend_sha256 }}
         run: |
-          docker buildx build --load --platform linux/amd64 \
-            --cache-from type=gha,scope=backend \
-            --cache-to type=gha,mode=max,scope=backend \
-            --tag "$BACKEND_IMAGE:$GITHUB_SHA" ./backend
-          docker buildx build --load --platform linux/amd64 \
-            --cache-from type=gha,scope=frontend \
-            --cache-to type=gha,mode=max,scope=frontend \
-            --tag "$FRONTEND_IMAGE:$GITHUB_SHA" ./frontend
-      - name: Scan backend release image
-        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
-        with:
-          image-ref: ${{ env.BACKEND_IMAGE }}:${{ github.sha }}
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
-          exit-code: 1
-          scanners: vuln
-      - name: Scan frontend release image
-        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
-        with:
-          image-ref: ${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
-          exit-code: 1
-          scanners: vuln
-          skip-setup-trivy: true
-      - name: Generate release SBOMs
-        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
-        with:
-          image-ref: ${{ env.BACKEND_IMAGE }}:${{ github.sha }}
-          format: cyclonedx
-          output: backend-sbom.cdx.json
-          scan-type: image
-          skip-setup-trivy: true
-      - name: Generate frontend SBOM
-        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
-        with:
-          image-ref: ${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
-          format: cyclonedx
-          output: frontend-sbom.cdx.json
-          scan-type: image
-          skip-setup-trivy: true
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          def sha256(path):
+              digest = hashlib.sha256()
+              with Path(path).open("rb") as stream:
+                  for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                      digest.update(chunk)
+              return digest.hexdigest()
+
+          approval = json.loads(Path("security-evidence/approval.json").read_text())
+          expected = {
+              "schema": 1,
+              "repository": os.environ["GITHUB_REPOSITORY"],
+              "commit": os.environ["GITHUB_SHA"],
+              "run_id": os.environ["GITHUB_RUN_ID"],
+          }
+          for key, value in expected.items():
+              if approval.get(key) != value:
+                  raise SystemExit(f"Approval {key} does not match this workflow run")
+
+          artifact = approval.get("image_artifact", {})
+          if artifact.get("id") != os.environ["EXPECTED_IMAGE_ARTIFACT_ID"]:
+              raise SystemExit("Approval references a different image artifact ID")
+          if artifact.get("digest") != os.environ["EXPECTED_IMAGE_ARTIFACT_DIGEST"]:
+              raise SystemExit("Approval references a different image artifact digest")
+
+          archives = {
+              "backend": ("release-images/backend-image.tar", os.environ["EXPECTED_BACKEND_SHA256"]),
+              "frontend": ("release-images/frontend-image.tar", os.environ["EXPECTED_FRONTEND_SHA256"]),
+          }
+          for name, (path, expected_hash) in archives.items():
+              actual_hash = sha256(path)
+              approved_hash = approval.get("images", {}).get(name, {}).get("archive_sha256")
+              if actual_hash != expected_hash or actual_hash != approved_hash:
+                  raise SystemExit(f"{name} image archive hash is not approved")
+
+          sboms = {
+              "backend": "security-evidence/backend-sbom.cdx.json",
+              "frontend": "security-evidence/frontend-sbom.cdx.json",
+          }
+          for name, path in sboms.items():
+              actual_hash = sha256(path)
+              approved_hash = approval.get("sboms", {}).get(name, {}).get("sha256")
+              if actual_hash != approved_hash:
+                  raise SystemExit(f"{name} SBOM hash is not approved")
+          print("Release evidence matches this repository, commit, run, and exact image archives.")
+          PY
+          cd release-images
+          sha256sum --check SHA256SUMS
+      - name: Load approved images without executing them
+        run: |
+          docker load --input release-images/backend-image.tar
+          docker load --input release-images/frontend-image.tar
+          docker image inspect "$BACKEND_IMAGE:$GITHUB_SHA" >/dev/null
+          docker image inspect "$FRONTEND_IMAGE:$GITHUB_SHA" >/dev/null
       - name: Login to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
@@ -319,8 +710,12 @@ jobs:
           docker push "$FRONTEND_IMAGE:$GITHUB_SHA"
           backend_ref=$(docker image inspect --format='{{index .RepoDigests 0}}' "$BACKEND_IMAGE:$GITHUB_SHA")
           frontend_ref=$(docker image inspect --format='{{index .RepoDigests 0}}' "$FRONTEND_IMAGE:$GITHUB_SHA")
-          echo "backend_digest=${backend_ref#*@}" >> "$GITHUB_OUTPUT"
-          echo "frontend_digest=${frontend_ref#*@}" >> "$GITHUB_OUTPUT"
+          backend_digest=${backend_ref#*@}
+          frontend_digest=${frontend_ref#*@}
+          [[ "$backend_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$frontend_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          echo "backend_digest=$backend_digest" >> "$GITHUB_OUTPUT"
+          echo "frontend_digest=$frontend_digest" >> "$GITHUB_OUTPUT"
       - name: Attest backend provenance
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
@@ -332,7 +727,7 @@ jobs:
         with:
           subject-name: ${{ env.BACKEND_IMAGE }}
           subject-digest: ${{ steps.publish.outputs.backend_digest }}
-          sbom-path: backend-sbom.cdx.json
+          sbom-path: security-evidence/backend-sbom.cdx.json
           push-to-registry: true
       - name: Attest frontend provenance
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
@@ -345,13 +740,13 @@ jobs:
         with:
           subject-name: ${{ env.FRONTEND_IMAGE }}
           subject-digest: ${{ steps.publish.outputs.frontend_digest }}
-          sbom-path: frontend-sbom.cdx.json
+          sbom-path: security-evidence/frontend-sbom.cdx.json
           push-to-registry: true
 
   promote:
     name: Open GitOps promotion PR
-    if: github.event_name == 'push' && vars.ENABLE_GITOPS_PROMOTION == 'true'
-    needs: images
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.ENABLE_GITOPS_PROMOTION == 'true' && needs.release.result == 'success'
+    needs: release
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -381,11 +776,12 @@ jobs:
           repository: ${{ env.GITOPS_OWNER }}/${{ env.GITOPS_REPOSITORY }}
           token: ${{ steps.app-token.outputs.token }}
           path: gitops
+          persist-credentials: false
       - name: Update and validate production digests
         working-directory: gitops
         env:
-          BACKEND_DIGEST: ${{ needs.images.outputs.backend_digest }}
-          FRONTEND_DIGEST: ${{ needs.images.outputs.frontend_digest }}
+          BACKEND_DIGEST: ${{ needs.release.outputs.backend_digest }}
+          FRONTEND_DIGEST: ${{ needs.release.outputs.frontend_digest }}
         run: |
           python3 -m pip install --disable-pip-version-check PyYAML==6.0.3
           python3 ../source/scripts/update-images.py \
@@ -401,6 +797,7 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
+          gh auth setup-git
           branch="promote/${GITHUB_SHA}"
           repository="$GITOPS_OWNER/$GITOPS_REPOSITORY"
           existing_pr=$(gh pr list --repo "$repository" --state open --head "$branch" --json number --jq '.[0].number // empty')

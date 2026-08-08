@@ -75,7 +75,7 @@ Each generated file has an isolated preview page with copy and download actions.
 
 ### GitHub Actions CI/CD
 
-OpsForge includes a GitHub Actions pipeline that tests the application, scans the exact release images, publishes them to GHCR with SBOMs and attestations, and opens a reviewed digest-only GitOps promotion pull request.
+OpsForge includes a GitHub Actions pipeline that tests the application, builds each image once, approves the exact image archives through one centralized security gate, publishes only those archives to GHCR with SBOMs and attestations, and opens a reviewed digest-only GitOps promotion pull request.
 
 ![OpsForge GitHub Actions CI/CD deployment](screenshoot/08-github-actions-cd.png)
 
@@ -105,8 +105,10 @@ OpsForge has a GitHub Actions workflow for this repo:
 
 - Runs backend tests
 - Builds the frontend
-- Builds backend and frontend Docker images
-- Pushes images to GitHub Container Registry
+- Builds backend and frontend images once in an unprivileged job
+- Runs dependency, CodeQL, secret, IaC, and container scanning in one fail-closed `Security gate`
+- Passes immutable artifact IDs, SHA-256 checksums, SBOMs, and approval evidence to release
+- Pushes only the scanned image archives to GitHub Container Registry; release never rebuilds
 - Publishes commit-SHA images and promotes immutable digests
 - Generates CycloneDX SBOMs and build attestations
 - Opens a reviewed GitOps promotion pull request
