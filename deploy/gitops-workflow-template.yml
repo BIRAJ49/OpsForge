@@ -49,7 +49,7 @@ jobs:
             fi
             gh attestation verify "oci://$image" \
               --repo BIRAJ49/OpsForge \
-              --signer-workflow BIRAJ49/OpsForge/.github/workflows/opsforge-ci-cd.yml \
+              --signer-workflow BIRAJ49/OpsForge/.github/workflows/build.yml \
               --source-ref refs/heads/main \
               --deny-self-hosted-runners
           done

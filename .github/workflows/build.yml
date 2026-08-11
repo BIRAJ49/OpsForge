@@ -1,0 +1,547 @@
+name: Build and stage release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: opsforge-main-release
+  cancel-in-progress: false
+
+env:
+  BACKEND_IMAGE: ghcr.io/biraj49/opsforge-backend
+  FRONTEND_IMAGE: ghcr.io/biraj49/opsforge-frontend
+  REGISTRY: ghcr.io
+  TRIVY_VERSION: v0.73.0
+
+jobs:
+  preflight:
+    name: Require protected main
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Reject manual runs from other refs
+        run: |
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "Releases may only run from refs/heads/main." >&2
+            exit 1
+          fi
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+
+  validate:
+    name: Revalidate main commit
+    needs: preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    env:
+      APP_ENV: test
+      DATABASE_URL: postgresql://opsforge:opsforge-ci-password@localhost:5432/opsforge_test
+      JWT_SECRET_KEY: opsforge-ci-secret-at-least-32-bytes
+      ADMIN_PASSWORD: admin-password-123
+    services:
+      postgres:
+        image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+        env:
+          POSTGRES_DB: opsforge_test
+          POSTGRES_USER: opsforge
+          POSTGRES_PASSWORD: opsforge-ci-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U opsforge -d opsforge_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify the exact checked-out commit
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install backend dependencies
+        working-directory: backend
+        run: |
+          python -m pip install --disable-pip-version-check -r requirements-dev.txt
+          python -m pip check
+      - name: Ruff lint
+        run: python -m ruff check backend/app backend/alembic
+      - name: Ruff format Python files changed by this commit
+        run: |
+          base_sha=$(git rev-parse "$GITHUB_SHA^" 2>/dev/null || git hash-object -t tree /dev/null)
+          mapfile -d '' python_files < <(
+            git diff --name-only --diff-filter=ACMR -z \
+              "$base_sha" "$GITHUB_SHA" -- ':(glob)backend/**/*.py'
+          )
+          if (( ${#python_files[@]} > 0 )); then
+            python -m ruff format --check "${python_files[@]}"
+          else
+            echo "No backend Python files changed."
+          fi
+      - name: Verify PostgreSQL migrations
+        working-directory: backend
+        run: |
+          python -m alembic upgrade head
+          python -m alembic check
+      - name: Run backend tests with coverage
+        working-directory: backend
+        run: >-
+          python -m pytest -q
+          --cov=app
+          --cov-fail-under=60
+          --cov-report=term-missing
+          --cov-report=xml:coverage.xml
+      - name: Install locked frontend dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: Lint frontend
+        working-directory: frontend
+        run: npm run lint
+      - name: Run frontend unit tests with coverage
+        working-directory: frontend
+        run: npm run test:coverage
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+      - name: Install the hash-locked Python audit tool
+        run: |
+          audit_venv="$RUNNER_TEMP/opsforge-audit-venv"
+          python -m venv "$audit_venv"
+          "$audit_venv/bin/python" -m pip install \
+            --disable-pip-version-check \
+            --no-cache-dir \
+            --only-binary=:all: \
+            --require-hashes \
+            -r backend/requirements-audit.txt
+          "$audit_venv/bin/python" -m pip check
+          echo "AUDIT_PYTHON=$audit_venv/bin/python" >> "$GITHUB_ENV"
+      - name: Audit backend production dependencies
+        run: |
+          "$AUDIT_PYTHON" -m pip_audit --strict -r backend/requirements.txt
+      - name: Audit the GitOps promotion dependency set
+        run: |
+          "$AUDIT_PYTHON" -m pip_audit --strict --no-deps -r backend/requirements-gitops.txt
+      - name: Audit frontend production dependencies
+        working-directory: frontend
+        run: npm run audit:ci
+      - name: Lint GitHub Actions
+        run: |
+          docker run --rm \
+            --volume "$GITHUB_WORKSPACE:/repo" \
+            --workdir /repo \
+            docker.io/rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 \
+            -color .github/workflows/*.yml deploy/gitops-workflow-template.yml
+      - name: Scan secrets and infrastructure configuration
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          scan-type: fs
+          scan-ref: .
+          scanners: misconfig,secret
+          skip-dirs: infra/terraform/.terraform
+          skip-files: infra/terraform/tfplan*,infra/terraform/terraform.tfstate
+          trivyignores: .trivyignore.yaml
+          severity: HIGH,CRITICAL
+          format: table
+          exit-code: 1
+      - name: Require SonarQube configuration
+        env:
+          SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          [[ -n "$SONAR_HOST_URL" ]] || { echo "SONAR_HOST_URL is not configured." >&2; exit 1; }
+          [[ -n "$SONAR_TOKEN" ]] || { echo "SONAR_TOKEN is not configured." >&2; exit 1; }
+      - name: Scan and wait for the SonarQube quality gate
+        uses: SonarSource/sonarqube-scan-action@22918119ff8e1ca75a623e15c8296b6ea4fbe28f # v8.2.1
+        env:
+          SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
+          SONAR_ROOT_CERT: ${{ secrets.SONAR_ROOT_CERT }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          args: >-
+            -Dsonar.qualitygate.wait=true
+            -Dsonar.qualitygate.timeout=600
+
+  build_scan:
+    name: Build and scan immutable images
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    outputs:
+      artifact_digest: ${{ steps.release_artifact.outputs.artifact-digest }}
+      artifact_id: ${{ steps.release_artifact.outputs.artifact-id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Verify the exact checked-out commit
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+      - name: Build each release image exactly once
+        run: |
+          mkdir -p release-images
+          docker buildx build --pull --platform linux/amd64 --provenance=false \
+            --cache-from type=gha,scope=backend \
+            --cache-to type=gha,mode=max,scope=backend \
+            --tag "$BACKEND_IMAGE:$GITHUB_SHA" \
+            --output type=docker,dest=release-images/backend-image.tar \
+            ./backend
+          docker buildx build --pull --platform linux/amd64 --provenance=false \
+            --cache-from type=gha,scope=frontend \
+            --cache-to type=gha,mode=max,scope=frontend \
+            --tag "$FRONTEND_IMAGE:$GITHUB_SHA" \
+            --output type=docker,dest=release-images/frontend-image.tar \
+            ./frontend
+      - name: Scan backend image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          scan-type: image
+          input: release-images/backend-image.tar
+          scanners: vuln
+          severity: HIGH,CRITICAL
+          format: json
+          output: release-images/backend-vulnerabilities.json
+          exit-code: 0
+      - name: Scan frontend image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          skip-setup-trivy: true
+          scan-type: image
+          input: release-images/frontend-image.tar
+          scanners: vuln
+          severity: HIGH,CRITICAL
+          format: json
+          output: release-images/frontend-vulnerabilities.json
+          exit-code: 0
+      - name: Enforce container vulnerability policy
+        run: >-
+          python scripts/enforce-trivy-image-policy.py
+          release-images/backend-vulnerabilities.json
+          release-images/frontend-vulnerabilities.json
+      - name: Generate backend CycloneDX SBOM
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          skip-setup-trivy: true
+          scan-type: image
+          input: release-images/backend-image.tar
+          scanners: vuln
+          format: cyclonedx
+          output: release-images/backend-sbom.cdx.json
+          exit-code: 0
+      - name: Generate frontend CycloneDX SBOM
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          skip-setup-trivy: true
+          scan-type: image
+          input: release-images/frontend-image.tar
+          scanners: vuln
+          format: cyclonedx
+          output: release-images/frontend-sbom.cdx.json
+          exit-code: 0
+      - name: Validate SBOMs and record checksums
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          for path in (
+              Path("release-images/backend-sbom.cdx.json"),
+              Path("release-images/frontend-sbom.cdx.json"),
+          ):
+              document = json.loads(path.read_text(encoding="utf-8"))
+              if document.get("bomFormat") != "CycloneDX":
+                  raise SystemExit(f"{path} is not a CycloneDX SBOM")
+              if not document.get("components"):
+                  raise SystemExit(f"{path} contains no components")
+          PY
+          cd release-images
+          sha256sum \
+            backend-image.tar \
+            frontend-image.tar \
+            backend-sbom.cdx.json \
+            frontend-sbom.cdx.json \
+            > SHA256SUMS
+          sha256sum --check SHA256SUMS
+      - name: Upload scanned release bundle
+        id: release_artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-images-${{ github.run_id }}-${{ github.run_attempt }}
+          path: release-images/
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+          overwrite: false
+
+  publish:
+    name: Publish and attest approved images
+    needs: build_scan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      attestations: write # Publish provenance and SBOM attestations for the approved images.
+      contents: read
+      id-token: write # Obtain the short-lived OIDC identity used by GitHub attestations.
+      packages: write # Push the already-scanned images to GHCR.
+    outputs:
+      backend_digest: ${{ steps.publish_images.outputs.backend_digest }}
+      frontend_digest: ${{ steps.publish_images.outputs.frontend_digest }}
+    steps:
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+      - name: Download the exact scanned release bundle
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.build_scan.outputs.artifact_id }}
+          path: release-images
+          digest-mismatch: error
+      - name: Verify release bundle checksums
+        working-directory: release-images
+        run: sha256sum --check SHA256SUMS
+      - name: Load approved images without rebuilding
+        run: |
+          docker load --input release-images/backend-image.tar
+          docker load --input release-images/frontend-image.tar
+          docker image inspect "$BACKEND_IMAGE:$GITHUB_SHA" >/dev/null
+          docker image inspect "$FRONTEND_IMAGE:$GITHUB_SHA" >/dev/null
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish full-Git-SHA image tags
+        id: publish_images
+        run: |
+          docker push "$BACKEND_IMAGE:$GITHUB_SHA"
+          docker push "$FRONTEND_IMAGE:$GITHUB_SHA"
+
+          backend_digest=$(docker buildx imagetools inspect \
+            "$BACKEND_IMAGE:$GITHUB_SHA" --format '{{.Manifest.Digest}}')
+          frontend_digest=$(docker buildx imagetools inspect \
+            "$FRONTEND_IMAGE:$GITHUB_SHA" --format '{{.Manifest.Digest}}')
+          [[ "$backend_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$frontend_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          echo "backend_digest=$backend_digest" >> "$GITHUB_OUTPUT"
+          echo "frontend_digest=$frontend_digest" >> "$GITHUB_OUTPUT"
+      - name: Attest backend provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-name: ${{ env.BACKEND_IMAGE }}
+          subject-digest: ${{ steps.publish_images.outputs.backend_digest }}
+          push-to-registry: true
+      - name: Attest backend SBOM
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-name: ${{ env.BACKEND_IMAGE }}
+          subject-digest: ${{ steps.publish_images.outputs.backend_digest }}
+          sbom-path: release-images/backend-sbom.cdx.json
+          push-to-registry: true
+      - name: Attest frontend provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-name: ${{ env.FRONTEND_IMAGE }}
+          subject-digest: ${{ steps.publish_images.outputs.frontend_digest }}
+          push-to-registry: true
+      - name: Attest frontend SBOM
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-name: ${{ env.FRONTEND_IMAGE }}
+          subject-digest: ${{ steps.publish_images.outputs.frontend_digest }}
+          sbom-path: release-images/frontend-sbom.cdx.json
+          push-to-registry: true
+
+  promote_staging:
+    name: Open or update staging promotion PR
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      vars.ENABLE_GITOPS_STAGING_PROMOTION == 'true' &&
+      needs.publish.result == 'success'
+    needs: publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      GITOPS_BRANCH: promote/opsforge-staging
+      GITOPS_OWNER: ${{ vars.GITOPS_OWNER || github.repository_owner }}
+      GITOPS_REPOSITORY: ${{ vars.GITOPS_REPOSITORY || 'OpsForge-GitOps' }}
+    steps:
+      - name: Create a repository-scoped GitHub App token
+        id: app_token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          client-id: ${{ secrets.GITOPS_APP_CLIENT_ID }}
+          private-key: ${{ secrets.GITOPS_APP_PRIVATE_KEY }}
+          owner: ${{ env.GITOPS_OWNER }}
+          repositories: ${{ env.GITOPS_REPOSITORY }}
+          permission-contents: write
+          permission-pull-requests: write
+      - name: Resolve the staging promotion branch
+        id: branch
+        env:
+          GH_TOKEN: ${{ steps.app_token.outputs.token }}
+        run: |
+          [[ "$GITOPS_OWNER" =~ ^[A-Za-z0-9-]+$ ]]
+          [[ "$GITOPS_REPOSITORY" =~ ^[A-Za-z0-9._-]+$ ]]
+          repository="$GITOPS_OWNER/$GITOPS_REPOSITORY"
+          matches=$(gh api "repos/$repository/git/matching-refs/heads/$GITOPS_BRANCH" \
+            --jq "[.[] | select(.ref == \"refs/heads/$GITOPS_BRANCH\")] | length")
+          if [[ "$matches" == "0" ]]; then
+            echo "checkout_ref=main" >> "$GITHUB_OUTPUT"
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          elif [[ "$matches" == "1" ]]; then
+            echo "checkout_ref=$GITOPS_BRANCH" >> "$GITHUB_OUTPUT"
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Expected at most one exact promotion branch, found $matches." >&2
+            exit 1
+          fi
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+      - name: Checkout the GitOps repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: ${{ env.GITOPS_OWNER }}/${{ env.GITOPS_REPOSITORY }}
+          ref: ${{ steps.branch.outputs.checkout_ref }}
+          token: ${{ steps.app_token.outputs.token }}
+          fetch-depth: 0
+          persist-credentials: false
+          path: gitops
+      - name: Prepare the bot-owned staging branch
+        working-directory: gitops
+        env:
+          BRANCH_EXISTS: ${{ steps.branch.outputs.exists }}
+        run: |
+          staging_file=applications/opsforge/overlays/staging/kustomization.yaml
+          git config user.name "opsforge-gitops[bot]"
+          git config user.email "opsforge-gitops[bot]@users.noreply.github.com"
+          if [[ "$BRANCH_EXISTS" == "true" ]]; then
+            git merge --no-edit origin/main
+          else
+            git switch --create "$GITOPS_BRANCH"
+          fi
+          git diff --exit-code origin/main -- \
+            scripts/update-images.py \
+            scripts/update_images.py
+          while IFS= read -r branch_path; do
+            if [[ "$branch_path" != "$staging_file" ]]; then
+              echo "Existing promotion branch contains an unexpected change: $branch_path" >&2
+              exit 1
+            fi
+          done < <(git diff --name-only origin/main HEAD)
+
+          expected_path="$PWD/$staging_file"
+          if [[ ! -f "$staging_file" || "$(realpath "$staging_file")" != "$expected_path" ]]; then
+            echo "$staging_file must be a regular in-repository file, not a symlink." >&2
+            exit 1
+          fi
+
+          python - <<'PY'
+          import re
+          import subprocess
+          from pathlib import Path
+
+          path = Path("applications/opsforge/overlays/staging/kustomization.yaml")
+          base = subprocess.check_output(
+              ["git", "show", f"origin/main:{path.as_posix()}"], text=True
+          )
+          branch = path.read_text(encoding="utf-8")
+
+          def without_digests(document: str) -> str:
+              normalized, count = re.subn(
+                  r"(?m)^(\s*digest:\s*)sha256:[0-9a-f]{64}(\s*)$",
+                  r"\1sha256:<digest>\2",
+                  document,
+              )
+              if count != 2:
+                  raise SystemExit(f"expected exactly two image digests, found {count}")
+              return normalized
+
+          if without_digests(base) != without_digests(branch):
+              raise SystemExit("the existing promotion branch changes more than image digests")
+          PY
+      - name: Update staging image digests only
+        id: update
+        working-directory: gitops
+        env:
+          BACKEND_DIGEST: ${{ needs.publish.outputs.backend_digest }}
+          FRONTEND_DIGEST: ${{ needs.publish.outputs.frontend_digest }}
+        run: |
+          [[ "$BACKEND_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$FRONTEND_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+
+          python scripts/update-images.py \
+            --environment staging \
+            --backend "$BACKEND_IMAGE@$BACKEND_DIGEST" \
+            --frontend "$FRONTEND_IMAGE@$FRONTEND_DIGEST"
+
+          mapfile -t changed_paths < <(
+            {
+              git diff --name-only
+              git ls-files --others --exclude-standard
+            } | sort -u
+          )
+          if (( ${#changed_paths[@]} == 0 )); then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Staging already references these exact image digests."
+            exit 0
+          fi
+
+          for changed_path in "${changed_paths[@]}"; do
+            if [[ "$changed_path" != "applications/opsforge/overlays/staging/kustomization.yaml" ]]; then
+              echo "Promotion attempted to modify an unexpected path: $changed_path" >&2
+              exit 1
+            fi
+          done
+
+          git add --all
+          git diff --cached --no-ext-diff --unified=0 | grep '^+' | grep -F "$BACKEND_DIGEST" >/dev/null
+          git diff --cached --no-ext-diff --unified=0 | grep '^+' | grep -F "$FRONTEND_DIGEST" >/dev/null
+          git diff --cached --check
+          git commit -m "promote(staging): OpsForge $GITHUB_SHA"
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+      - name: Push the branch and open or update its pull request
+        if: steps.update.outputs.changed == 'true'
+        working-directory: gitops
+        env:
+          GH_TOKEN: ${{ steps.app_token.outputs.token }}
+        run: |
+          repository="$GITOPS_OWNER/$GITOPS_REPOSITORY"
+          body="Promotes the signed backend and frontend image digests built from ${GITHUB_REPOSITORY}@${GITHUB_SHA} to staging. Production is unchanged."
+          gh auth setup-git
+          git push --set-upstream origin "HEAD:$GITOPS_BRANCH"
+
+          existing_pr=$(gh api --method GET "repos/$repository/pulls" \
+            -f state=open \
+            -f base=main \
+            -f head="$GITOPS_OWNER:$GITOPS_BRANCH" \
+            --jq '.[0].number // empty')
+          if [[ -n "$existing_pr" ]]; then
+            gh pr edit "$existing_pr" --repo "$repository" \
+              --title "promote(staging): OpsForge" \
+              --body "$body"
+          else
+            gh pr create --repo "$repository" \
+              --base main \
+              --head "$GITOPS_BRANCH" \
+              --title "promote(staging): OpsForge" \
+              --body "$body"
+          fi

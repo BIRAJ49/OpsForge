@@ -32,7 +32,7 @@ Prometheus, Loki, Alertmanager, PostgreSQL, Redis, the Kubernetes API, and inter
 
 ## Delivery
 
-Application pull requests run backend, frontend, workflow, Terraform, Kustomize, and Compose quality checks before building each image exactly once in an unprivileged job. One fail-closed `Security gate` then audits Python and Node production dependencies, enforces high/critical CodeQL findings, scans secrets and IaC, scans the exact image archives, and generates validated CycloneDX SBOMs. The same gate reproducibly builds the pinned Trivy scanner from an asserted source tree and exact dependency patch, verifies its build metadata and raw hash, and self-scans it before use. Release receives the image archives by immutable artifact ID, verifies GitHub artifact digests, independent SHA-256 checksums, and commit-bound approval evidence, then publishes without rebuilding and attaches GitHub OIDC-backed attestations. A repository-scoped GitHub App can then open a digest promotion PR in `OpsForge-GitOps`. Production promotion requires review; Argo CD deploys only merged Git state.
+Application pull requests run backend and frontend lint, tests, coverage, dependency audits, SonarQube, secret/IaC scans, and exact-image Trivy scans. A stable, fail-closed `CI and security gate` aggregates those event-driven checks. Protected-main releases repeat the validation, build each image once in an unprivileged job, scan the exact archives, and generate CycloneDX SBOMs. A separate least-privilege job verifies the bundle, publishes it without rebuilding, and attaches GitHub OIDC-backed provenance and SBOM attestations. A repository-scoped GitHub App can then open or update a staging-only digest promotion PR in `OpsForge-GitOps`. Production promotion is a later reviewed Git change; Argo CD deploys only merged Git state.
 
 The production API image deliberately contains no Trivy binary. Its optional
 synchronous scanner is disabled in production; the release gate is the sole
@@ -41,9 +41,9 @@ isolated, least-privilege worker. GitOps-repository policy validation remains a
 separate trust boundary because it evaluates the desired state that Argo CD
 will actually reconcile.
 
-Trivy `v0.73.0-opsforge.1` is a temporary OpsForge-maintained derivative, not an upstream release or vulnerability waiver. The platform owner must review and replace it with the first clean official release no later than 2026-09-30. Its upstream commit, source tree, deterministic patch commit, module graph, binary hash, and self-scan report are retained in release evidence.
+The Actions workflows use a full-SHA-pinned Trivy action and an explicitly pinned Trivy release. They do not upload SARIF or enable GitHub CodeQL/default scanning. Scanner upgrades are reviewed changes to the protected workflows, not scheduled bot pull requests.
 
-Terraform pull requests retain credential-free format, backend-disabled initialization, and validation checks inside the application workflow. Production Terraform planning and applying runs separately through an operator-controlled infrastructure process with protected state, least-privilege credentials, and exact-plan review.
+The application workflow runs credential-free Trivy IaC checks over Terraform and deployment configuration. Terraform format, initialization, validation, production planning, and applying run separately through an operator-controlled infrastructure process with protected state, least-privilege credentials, and exact-plan review.
 
 ## Objectives And Limits
 
@@ -55,21 +55,18 @@ Terraform pull requests retain credential-free format, backend-disabled initiali
 
 ## Required Repository Configuration
 
-Create `BIRAJ49/OpsForge-GitOps` and seed the one-time, production-only migration scaffold with two already published image digests:
+`BIRAJ49/OpsForge-GitOps` is the canonical multi-environment desired-state
+repository. The old `scripts/bootstrap-gitops-repository.sh` helper creates only
+a legacy production scaffold and must not be used for a new installation.
+Protect GitOps `main` with `GitOps policy gate`, at least one CODEOWNER approval,
+stale-review dismissal, conversation resolution, and no administrator bypass.
+Production promotions are always reviewed pull requests.
 
-```bash
-scripts/bootstrap-gitops-repository.sh ../OpsForge-GitOps \
-  ghcr.io/biraj49/opsforge-backend@sha256:<64-hex-digest> \
-  ghcr.io/biraj49/opsforge-frontend@sha256:<64-hex-digest>
-```
+Create a repository-scoped GitHub App installed only on `OpsForge-GitOps` with Contents and Pull requests read/write. Add `GITOPS_APP_CLIENT_ID` and `GITOPS_APP_PRIVATE_KEY` to the application repository secrets. Keep `ENABLE_GITOPS_STAGING_PROMOTION=false` until the staging overlay, GitOps policy checks, and Argo CD staging application are ready. The application workflow never promotes production.
 
-The helper creates `CODEOWNERS`, a validation workflow, and digest-pinned state. It is not the final multi-environment repository design: migrate to the layout in `gitops-production-roadmap.md` and stop maintaining the source-repository copy. Protect GitOps `main` with `Render and scan manifests` required, at least one CODEOWNER approval, stale-review dismissal, and no administrator bypass. Do not automatically merge production promotions.
+Protect this repository's `main` branch with the stable `CI and security gate` check from `.github/workflows/pr-check.yml`; that job fails closed when any prerequisite quality, build, or security control fails. Require pull requests, at least one CODEOWNER approval, stale-review dismissal, last-push approval, and resolved review conversations. Keep the default `GITHUB_TOKEN` permission read-only and allow only approved, full-SHA-pinned actions. The exact settings are in `github-rulesets.md`.
 
-Create a repository-scoped GitHub App installed only on `OpsForge-GitOps` with Contents and Pull requests read/write. Add `GITOPS_APP_CLIENT_ID` and `GITOPS_APP_PRIVATE_KEY` to the application repository secrets. Keep `ENABLE_GITOPS_PROMOTION` unset until every blocker and exit criterion in `gitops-production-roadmap.md` is complete, including staged promotion and restricted Argo/RBAC boundaries.
-
-Protect this repository's `main` branch with the stable `Security gate` check from `.github/workflows/opsforge-ci-cd.yml`; that job fails closed when any prerequisite quality, build, or security control fails. Require pull requests, at least one approval, stale-review dismissal, and resolved review conversations. Keep the default `GITHUB_TOKEN` permission read-only and allow only approved, full-SHA-pinned actions.
-
-Manual runs of `OpsForge production CI/CD` run CI, security scans, and evidence generation only. Image release and GitOps promotion remain restricted to pushes on `main`.
+Manual runs of `Build and stage release` are rejected unless launched from `main`. They repeat CI and security checks, publish full-Git-SHA images, and may update staging when the staging promotion feature flag is enabled. They cannot promote production.
 
 ## External Uptime
 

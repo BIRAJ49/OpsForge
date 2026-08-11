@@ -30,9 +30,26 @@ services:
     networks:
       - opsforge
 
+  migrate:
+    build:
+      context: ./backend
+    image: opsforge-backend:local
+    restart: "no"
+    env_file:
+      - ./backend/.env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-opsforge}:${POSTGRES_PASSWORD:-opsforge}@postgres:5432/${POSTGRES_DB:-opsforge}
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - opsforge
+
   backend:
     build:
       context: ./backend
+    image: opsforge-backend:local
     restart: unless-stopped
     env_file:
       - ./backend/.env
@@ -46,10 +63,14 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     expose:
       - "8000"
     networks:
-      - opsforge
+      opsforge:
+        aliases:
+          - opsforge-backend
 
   frontend:
     build:

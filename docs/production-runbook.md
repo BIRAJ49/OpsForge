@@ -1,16 +1,30 @@
-# Production Rollout And Recovery
+# Legacy K3s Rollout And Recovery
+
+> This file documents the existing single-node compatibility deployment. It is
+> not the activation runbook for the canonical multi-environment architecture.
+> Use `OpsForge-GitOps/docs/operations.md` for the new-cluster bootstrap or
+> non-cascading Argo ownership handoff. Never apply the legacy and canonical
+> roots concurrently.
 
 ## Safe Rollout Order
 
-1. Apply Terraform with `enable_ssh_access = true`. Keep `enable_admin_access = false` until Cloudflare Access is available; Grafana and Argo CD remain private.
-2. Open an SSM session with the `ssm_command` Terraform output. Confirm `kubectl get nodes` works.
-3. Back up the Sealed Secrets key before adopting the controller into Argo CD.
-4. Create and validate `OpsForge-GitOps` with `scripts/bootstrap-gitops-repository.sh` and two verified image digest references, then apply `deploy/bootstrap/argocd-root-gitops.yaml` once.
-5. Verify the internal Argo applications, OpsForge ingress/certificate, alerts, and NetworkPolicies. The production root intentionally excludes `applications/platform-access.yaml` at this point.
-6. When Cloudflare Access is ready, apply a reviewed Terraform change with `enable_admin_access = true`; then use a reviewed GitOps change to add `applications/platform-access.yaml` to the production root. Verify Access before advertising either admin URL.
-7. Set `enable_ssh_access = false`, review the Terraform plan, and apply it. Confirm port 22 is absent from the security group.
-
-Do not switch the root application before the dedicated repository exists. Do not remove SSH before a working SSM session is verified.
+1. Keep the legacy root unchanged while the canonical tree is reviewed and the
+   new CI/security gates are configured.
+2. Produce a new scanned and attested release containing `/api/health/live`,
+   `/api/health/ready`, and `/metrics`; the compatibility digests predate those
+   endpoints and cannot pass the canonical probes.
+3. Configure target-cluster ingress, certificates, ESO workload identity,
+   private repository/package access, managed data services, and tested backup
+   restore before creating canonical Applications.
+4. Prefer bootstrapping `bootstrap/root.yaml` into a new target cluster. If the
+   existing cluster must be reused, follow the non-cascading root/Application
+   ownership handoff in the GitOps operations guide; do not let both roots own
+   Loki, Alloy, monitoring, ingress, or cert-manager concurrently.
+5. Validate staging, promote the exact tested digests through a production PR,
+   and switch DNS only after readiness, metrics, logs, alerts, migration, and
+   rollback checks pass.
+6. Remove the legacy root and compatibility tree only after every platform,
+   workload, secret, and data dependency has a confirmed canonical owner.
 
 ## Sealed Secrets Recovery Key
 
@@ -45,13 +59,12 @@ Monthly, restore the latest dump into a temporary PostgreSQL instance, run `pg_r
 
 ## Complete Rebuild
 
-1. Run Terraform apply to recreate AWS and Cloudflare resources.
-2. Wait for K3s cloud-init and connect through SSM.
-3. Install Argo CD, then restore the Sealed Secrets recovery key.
-4. Apply the root application from `OpsForge-GitOps`.
-5. Restore the latest verified PostgreSQL dump from S3.
-6. Verify DNS, certificates, Argo health, application login, email alerting, logs, and backup creation.
-7. Run `scripts/production-acceptance.sh`.
+These steps apply only when recovering the compatibility K3s platform. A
+canonical recovery provisions the target cluster and workload identity,
+restores managed data from a tested backup, installs pinned Argo CD, bootstraps
+the GitOps root, and lets ESO retrieve secrets from AWS. Git reconstructs
+stateless desired state; it does not restore PostgreSQL, Redis, telemetry data,
+DNS, or external credentials.
 
 ## Acceptance Checks
 

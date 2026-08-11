@@ -2,7 +2,8 @@
 
 OpsForge is a DevOps dashboard for creating or uploading projects, checking the stack, generating deployment files, pushing them to GitHub, deploying with Argo CD, and keeping an eye on Kubernetes, logs, scans, and incidents.
 
-Live deployment:
+Legacy deployment endpoint (the current single-node target may be intentionally
+stopped and is not the production-grade target described below):
 
 ```text
 https://opsforge.birajadhikari49.com.np
@@ -28,6 +29,12 @@ https://opsforge.birajadhikari49.com.np
 - Admin dashboard for user management, project visibility, usage, and audit logs
 - GitHub Actions workflow for OpsForge image builds and deployment
 - Custom domain and HTTPS using cert-manager and Let's Encrypt
+
+The feature list above describes implemented application capabilities and the
+legacy K3s deployment. The production delivery architecture is implemented in
+this working tree and in the separate `BIRAJ49/OpsForge-GitOps` repository, but
+it is not active until the documented repository settings, secrets, first new
+release, and Argo CD cutover have been completed.
 
 ## Screenshots
 
@@ -106,17 +113,18 @@ OpsForge has a GitHub Actions workflow for this repo:
 - Runs backend tests
 - Builds the frontend
 - Builds backend and frontend images once in an unprivileged job
-- Runs dependency, CodeQL, secret, IaC, and container scanning in one fail-closed `Security gate`
-- Passes immutable artifact IDs, SHA-256 checksums, SBOMs, and approval evidence to release
+- Runs dependency, SonarQube, secret, IaC, and container scanning behind one fail-closed `CI and security gate`
+- Passes immutable artifact IDs, SHA-256 checksums, and SBOMs in a verified release bundle
 - Pushes only the scanned image archives to GitHub Container Registry; release never rebuilds
 - Publishes commit-SHA images and promotes immutable digests
 - Generates CycloneDX SBOMs and build attestations
-- Opens a reviewed GitOps promotion pull request
+- Opens or updates a reviewed staging-only GitOps promotion pull request
 
 Workflow file:
 
 ```text
-.github/workflows/opsforge-ci-cd.yml
+.github/workflows/pr-check.yml
+.github/workflows/build.yml
 ```
 
 Images:
@@ -126,11 +134,14 @@ ghcr.io/biraj49/opsforge-backend:<commit-sha>
 ghcr.io/biraj49/opsforge-frontend:<commit-sha>
 ```
 
-The production workflow never writes application state directly to the cluster. It pushes verified images to GHCR and opens a digest-only pull request in the dedicated GitOps repository; Argo CD reconciles the merged desired state. Credential-free Terraform format and validation checks remain part of CI, while production Terraform plan/apply runs outside the application workflow. GitHub Actions does not run scheduled uptime checks; use independent synthetic monitoring for production availability.
+The release workflow never writes application state directly to the cluster. It pushes verified images to GHCR and can open a digest-only staging pull request in the dedicated GitOps repository; Argo CD reconciles merged Git state. Production requires a later, reviewed promotion of the same digest. GitHub Actions does not run scheduled scanners or uptime checks; use independent synthetic monitoring for production availability.
 
 ## GitOps And Kubernetes
 
-OpsForge runs on EC2 using K3s and Nginx Ingress. Argo CD is installed in the cluster and is used to register and sync generated applications.
+The legacy deployment runs on EC2 using K3s and Nginx Ingress. The canonical
+OpsForge desired state now lives in `BIRAJ49/OpsForge-GitOps` under
+`applications/opsforge`; Argo CD, rather than this application's API or GitHub
+Actions, is the normal deployment authority.
 
 Completed capabilities:
 
@@ -153,10 +164,11 @@ OpsForge also has monitoring pages for cluster metrics and workload data.
 
 ## Security Scanning
 
-The GitHub Actions `Security gate` centralizes dependency, CodeQL, workflow,
-secret, IaC, and exact-image scanning before release. It also creates validated
-CycloneDX SBOMs. The production backend does not embed Trivy; its optional
-synchronous scan endpoint is disabled until it can run in an isolated worker.
+The GitHub Actions `CI and security gate` centralizes dependency, SonarQube,
+workflow, secret, IaC, and exact-image scanning. Main releases repeat the
+checks, create validated CycloneDX SBOMs, and publish only the scanned image
+archives. The production backend does not embed Trivy; its optional synchronous
+scan endpoint is disabled until it can run in an isolated worker.
 
 ## Incident Analysis And Healing
 
@@ -270,7 +282,8 @@ Platform namespace:
 opsforge-system
 ```
 
-Main deployment resources are stored in:
+The application-repository resources below are a temporary compatibility copy
+for the existing root and must not receive new releases:
 
 ```text
 deploy/k8s/opsforge/
@@ -311,12 +324,23 @@ SMTP_FROM_EMAIL
 
 ## Remaining Work
 
-- Add final screenshots for GitHub Actions, Argo CD, Kubernetes, monitoring, Trivy, incidents, healing, admin pages, and audit logs
-- Polish generated app deployment templates for every stack type
-- Create and protect the dedicated GitOps repository, then enable digest promotion PRs
-- Add deeper Grafana/Loki embeds or links inside OpsForge
-- Add cloud cost visibility later
-- Record final demo video
+- Merge and protect both repositories with the exact required aggregate checks,
+  CODEOWNER review, stale-review dismissal, resolved conversations, and no
+  administrator bypass.
+- Configure SonarQube, the repository-scoped GitHub App, private GHCR read
+  access, AWS Secrets Manager values, workload identity, and Argo private-repo
+  credentials; disable the external GitGuardian PR check if one visible gate is
+  required.
+- Produce the first new scanned/attested release, validate it in staging, and
+  promote the exact digests through a reviewed production GitOps PR.
+- Perform the documented non-cascading Argo ownership/data cutover. Only then
+  remove the legacy `deploy/k8s` and GitOps `production/` compatibility trees.
+- Replace or explicitly accept the stopped single-node, local-storage platform;
+  a genuine production target needs multi-zone compute, managed PostgreSQL and
+  Redis, off-node telemetry, and tested backup/restore.
+- Remove routine direct Argo/Kubernetes mutation from the dashboard and harden
+  generated delivery templates before treating user-generated workloads as
+  trusted production artifacts.
 
 ## Project Summary
 

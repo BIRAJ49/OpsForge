@@ -112,11 +112,14 @@ docker compose up --build
 
 This starts:
 
+- `migrate` (one-shot)
 - `backend`
 - `postgres`
 - `redis`
 
-The backend container runs `alembic upgrade head` before starting FastAPI.
+Compose runs `alembic upgrade head` once and requires it to finish successfully
+before starting FastAPI. The production image itself never mutates the database
+on startup; GitOps runs the same migration as a dedicated Argo CD PreSync Job.
 
 ## Admin Seed
 
@@ -322,7 +325,7 @@ If `ARGOCD_SERVER` and `ARGOCD_TOKEN` are not configured, Argo CD endpoints retu
 ## Trivy Setup
 
 Production images do not contain a scanner. Release dependency, source, secret,
-IaC, and exact-image scans run in the centralized `Security gate` in GitHub
+IaC, and exact-image scans run in the centralized `CI and security gate` in GitHub
 Actions, and every publish, attestation, and promotion job depends on that gate.
 This keeps a large security tool and its transitive dependencies out of the
 internet-facing API image.
