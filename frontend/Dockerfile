@@ -13,6 +13,12 @@ RUN npm run build
 
 FROM nginx:1.30.3-alpine3.23@sha256:0d3b80406a13a767339fbe2f41406d6c7da727ab89cf8fae399e81f780f814d1
 
+RUN apk add --no-cache \
+    c-ares=1.34.8-r0 \
+    curl=8.20.0-r0 \
+    libcurl=8.20.0-r0 \
+    libexpat=2.8.2-r0
+
 COPY --chown=nginx:nginx nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build --chown=nginx:nginx /app/dist /usr/share/nginx/html
 
