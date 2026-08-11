@@ -11,6 +11,9 @@ deploy/k8s/opsforge/secret.yaml
 node_modules
 dist
 dist-ssr
+coverage/
+.coverage
+coverage.xml
 *.local
 backend/.env
 backend/.venv

@@ -50,9 +50,9 @@ class Settings(BaseSettings):
     FRONTEND_URL: str = "http://localhost:5173"
 
     GHCR_REGISTRY: str = "ghcr.io"
-    GHCR_USERNAME: str = "BIRAJ49"
+    GHCR_USERNAME: str = "biraj49"
     GHCR_TOKEN: str | None = None
-    GHCR_IMAGE_FORMAT: str = "ghcr.io/BIRAJ49/{project-name}:{tag}"
+    GHCR_IMAGE_FORMAT: str = "ghcr.io/biraj49/{project-name}:{tag}"
 
     KUBERNETES_MODE: str = "kubeconfig"
     KUBECONFIG_PATH: str | None = None

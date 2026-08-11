@@ -1,0 +1,10 @@
+* @BIRAJ49
+
+/.github/workflows/** @BIRAJ49
+/.github/CODEOWNERS @BIRAJ49
+/sonar-project.properties @BIRAJ49
+/backend/requirements*.txt @BIRAJ49
+/frontend/package.json @BIRAJ49
+/frontend/package-lock.json @BIRAJ49
+/scripts/** @BIRAJ49
+/deploy/** @BIRAJ49

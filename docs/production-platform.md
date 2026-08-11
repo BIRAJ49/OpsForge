@@ -32,18 +32,18 @@ Prometheus, Loki, Alertmanager, PostgreSQL, Redis, the Kubernetes API, and inter
 
 ## Delivery
 
-The deployment-only workflow runs for a push to `main` or a manual dispatch from
-`main`. It builds the backend and frontend images for Linux AMD64, publishes
-commit-SHA tags to GHCR, captures their immutable registry digests, and updates
-the production Kustomize state in `OpsForge-GitOps`. It renders that state and
-opens a deployment pull request using a repository-scoped GitHub App. Argo CD
-reconciles GitOps `main` only after the pull request is reviewed and merged.
+Application pull requests run backend and frontend lint, tests, coverage, dependency audits, SonarQube, secret/IaC scans, and exact-image Trivy scans. A stable, fail-closed `CI and security gate` aggregates those event-driven checks. Protected-main releases repeat the validation, build each image once in an unprivileged job, scan the exact archives, and generate CycloneDX SBOMs. A separate least-privilege job verifies the bundle, publishes it without rebuilding, and attaches GitHub OIDC-backed provenance and SBOM attestations. A repository-scoped GitHub App can then open or update a staging-only digest promotion PR in `OpsForge-GitOps`. Production promotion is a later reviewed Git change; Argo CD deploys only merged Git state.
 
-The workflow has no cluster credentials and performs no direct Kubernetes
-mutation. It also has no pull-request CI, schedule, dependency bot, security
-scanner, SBOM or attestation generation, synthetic monitoring, or Terraform
-jobs. Terraform infrastructure work is handled separately from application
-delivery.
+The production API image deliberately contains no Trivy binary. Its optional
+synchronous scanner is disabled in production; the release gate is the sole
+application-image scan authority until on-demand scanning is moved to an
+isolated, least-privilege worker. GitOps-repository policy validation remains a
+separate trust boundary because it evaluates the desired state that Argo CD
+will actually reconcile.
+
+The Actions workflows use a full-SHA-pinned Trivy action and an explicitly pinned Trivy release. They do not upload SARIF or enable GitHub CodeQL/default scanning. Scanner upgrades are reviewed changes to the protected workflows, not scheduled bot pull requests.
+
+The application workflow runs credential-free Trivy IaC checks over Terraform and deployment configuration. Terraform format, initialization, validation, production planning, and applying run separately through an operator-controlled infrastructure process with protected state, least-privilege credentials, and exact-plan review.
 
 ## Objectives And Limits
 
@@ -55,29 +55,19 @@ delivery.
 
 ## Required Repository Configuration
 
-Create `BIRAJ49/OpsForge-GitOps` and seed the one-time, production-only migration scaffold with two already published image digests:
+`BIRAJ49/OpsForge-GitOps` is the canonical multi-environment desired-state
+repository. The old `scripts/bootstrap-gitops-repository.sh` helper creates only
+a legacy production scaffold and must not be used for a new installation.
+Protect GitOps `main` with `GitOps policy gate`, at least one CODEOWNER approval,
+stale-review dismissal, conversation resolution, and no administrator bypass.
+Production promotions are always reviewed pull requests.
 
-```bash
-scripts/bootstrap-gitops-repository.sh ../OpsForge-GitOps \
-  ghcr.io/biraj49/opsforge-backend@sha256:<64-hex-digest> \
-  ghcr.io/biraj49/opsforge-frontend@sha256:<64-hex-digest>
-```
+Create a repository-scoped GitHub App installed only on `OpsForge-GitOps` with Contents and Pull requests read/write. Add `GITOPS_APP_CLIENT_ID` and `GITOPS_APP_PRIVATE_KEY` to the application repository secrets. Keep `ENABLE_GITOPS_STAGING_PROMOTION=false` until the staging overlay, GitOps policy checks, and Argo CD staging application are ready. The application workflow never promotes production.
 
-The helper creates `CODEOWNERS`, a render-and-digest validation workflow, and digest-pinned state. It is not the final multi-environment repository design: migrate to the layout in `gitops-production-roadmap.md` and stop maintaining the source-repository copy. Protect GitOps `main` with `Render GitOps manifests` required, at least one CODEOWNER approval, stale-review dismissal, and no administrator bypass. Do not automatically merge production promotions.
+Protect this repository's `main` branch with the stable `CI and security gate` check from `.github/workflows/pr-check.yml`; that job fails closed when any prerequisite quality, build, or security control fails. Require pull requests, at least one CODEOWNER approval, stale-review dismissal, last-push approval, and resolved review conversations. Keep the default `GITHUB_TOKEN` permission read-only and allow only approved, full-SHA-pinned actions. The exact settings are in `github-rulesets.md`.
 
-Create a repository-scoped GitHub App installed only on `OpsForge-GitOps` with Contents and Pull requests read/write. Add `GITOPS_APP_CLIENT_ID` and `GITOPS_APP_PRIVATE_KEY` to the application repository secrets. Optionally set `GITOPS_OWNER` and `GITOPS_REPOSITORY`; they default to the current owner and `OpsForge-GitOps`. Keep the GHCR packages public unless the cluster has an image pull secret.
-
-Protect this repository's `main` branch with pull-request review rules appropriate
-for the project, but remove stale required checks such as `Security gate` after
-removing those jobs. The delivery workflow's default token is read-only; only
-the image publishing job receives `packages: write`, and the short-lived GitHub
-App token is scoped to the GitOps repository.
-
-Manual runs of `OpsForge GitOps delivery` must target `main`. They follow the
-same image publication and deployment-PR path as a `main` push.
+Manual runs of `Build and stage release` are rejected unless launched from `main`. They repeat CI and security checks, publish full-Git-SHA images, and may update staging when the staging promotion feature flag is enabled. They cannot promote production.
 
 ## External Uptime
 
-GitHub Actions does not run a scheduled uptime bot. Configure an independent
-synthetic-monitoring service and external alert path before relying on this
-platform for a production SLO.
+GitHub Actions does not run a scheduled uptime workflow. Configure an independent synthetic-monitoring service and external alert path before relying on this platform for a production SLO.

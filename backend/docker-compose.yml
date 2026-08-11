@@ -20,8 +20,22 @@ services:
     ports:
       - "6379:6379"
 
+  migrate:
+    build: .
+    image: opsforge-backend:local
+    restart: "no"
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://opsforge:opsforge@postgres:5432/opsforge
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   backend:
     build: .
+    image: opsforge-backend:local
     env_file:
       - .env
     environment:
@@ -34,6 +48,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
+      migrate:
+        condition: service_completed_successfully
 
 volumes:
   opsforge-postgres:

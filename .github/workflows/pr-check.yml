@@ -1,0 +1,329 @@
+name: Pull request CI
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: opsforge-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  BACKEND_IMAGE: ghcr.io/biraj49/opsforge-backend
+  FRONTEND_IMAGE: ghcr.io/biraj49/opsforge-frontend
+  TRIVY_VERSION: v0.73.0
+
+jobs:
+  backend:
+    name: Backend quality
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      APP_ENV: test
+      DATABASE_URL: postgresql://opsforge:opsforge-ci-password@localhost:5432/opsforge_test
+      JWT_SECRET_KEY: opsforge-ci-secret-at-least-32-bytes
+      ADMIN_PASSWORD: admin-password-123
+    services:
+      postgres:
+        image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+        env:
+          POSTGRES_DB: opsforge_test
+          POSTGRES_USER: opsforge
+          POSTGRES_PASSWORD: opsforge-ci-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U opsforge -d opsforge_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
+      - name: Install backend dependencies
+        working-directory: backend
+        run: |
+          python -m pip install --disable-pip-version-check -r requirements-dev.txt
+          python -m pip check
+      - name: Ruff lint
+        run: python -m ruff check backend/app backend/alembic
+      - name: Ruff format changed Python files
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          mapfile -d '' python_files < <(
+            git diff --name-only --diff-filter=ACMR -z \
+              "$BASE_SHA...$HEAD_SHA" -- ':(glob)backend/**/*.py'
+          )
+          if (( ${#python_files[@]} > 0 )); then
+            python -m ruff format --check "${python_files[@]}"
+          else
+            echo "No backend Python files changed."
+          fi
+      - name: Verify PostgreSQL migrations
+        working-directory: backend
+        run: |
+          python -m alembic upgrade head
+          python -m alembic check
+      - name: Run backend tests with coverage
+        working-directory: backend
+        run: >-
+          python -m pytest -q
+          --cov=app
+          --cov-fail-under=60
+          --cov-report=term-missing
+          --cov-report=xml:coverage.xml
+      - name: Upload backend coverage
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: backend-coverage-${{ github.run_id }}
+          path: backend/coverage.xml
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 1
+
+  frontend:
+    name: Frontend quality
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install locked frontend dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: Lint frontend
+        working-directory: frontend
+        run: npm run lint
+      - name: Run frontend unit tests with coverage
+        working-directory: frontend
+        run: npm run test:coverage
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+      - name: Upload frontend coverage
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: frontend-coverage-${{ github.run_id }}
+          path: frontend/coverage/lcov.info
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 1
+
+  dependency_security:
+    name: Dependency security
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "22"
+      - name: Install the hash-locked Python audit tool
+        run: |
+          audit_venv="$RUNNER_TEMP/opsforge-audit-venv"
+          python -m venv "$audit_venv"
+          "$audit_venv/bin/python" -m pip install \
+            --disable-pip-version-check \
+            --no-cache-dir \
+            --only-binary=:all: \
+            --require-hashes \
+            -r backend/requirements-audit.txt
+          "$audit_venv/bin/python" -m pip check
+          echo "AUDIT_PYTHON=$audit_venv/bin/python" >> "$GITHUB_ENV"
+      - name: Audit backend production dependencies
+        run: |
+          "$AUDIT_PYTHON" -m pip_audit --strict -r backend/requirements.txt
+      - name: Audit the GitOps promotion dependency set
+        run: |
+          "$AUDIT_PYTHON" -m pip_audit --strict --no-deps -r backend/requirements-gitops.txt
+      - name: Audit frontend production dependencies
+        working-directory: frontend
+        run: npm run audit:ci
+
+  source_security:
+    name: Source and configuration security
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Lint GitHub Actions
+        run: |
+          docker run --rm \
+            --volume "$GITHUB_WORKSPACE:/repo" \
+            --workdir /repo \
+            docker.io/rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 \
+            -color .github/workflows/*.yml deploy/gitops-workflow-template.yml
+      - name: Scan secrets and infrastructure configuration
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          scan-type: fs
+          scan-ref: .
+          scanners: misconfig,secret
+          skip-dirs: infra/terraform/.terraform
+          skip-files: infra/terraform/tfplan*,infra/terraform/terraform.tfstate
+          trivyignores: .trivyignore.yaml
+          severity: HIGH,CRITICAL
+          format: table
+          exit-code: 1
+
+  sonarqube:
+    name: SonarQube quality gate
+    needs: [backend, frontend]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Download backend coverage
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: backend-coverage-${{ github.run_id }}
+          path: backend
+      - name: Download frontend coverage
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: frontend-coverage-${{ github.run_id }}
+          path: frontend/coverage
+      - name: Require SonarQube configuration
+        env:
+          SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          [[ -n "$SONAR_HOST_URL" ]] || { echo "SONAR_HOST_URL is not configured." >&2; exit 1; }
+          [[ -n "$SONAR_TOKEN" ]] || { echo "SONAR_TOKEN is not configured." >&2; exit 1; }
+      - name: Scan and wait for the SonarQube quality gate
+        uses: SonarSource/sonarqube-scan-action@22918119ff8e1ca75a623e15c8296b6ea4fbe28f # v8.2.1
+        env:
+          SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
+          SONAR_ROOT_CERT: ${{ secrets.SONAR_ROOT_CERT }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          args: >-
+            -Dsonar.qualitygate.wait=true
+            -Dsonar.qualitygate.timeout=600
+
+  container_security:
+    name: Container security
+    needs: [backend, frontend, dependency_security, source_security]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+      - name: Build exact pull request images without publishing
+        run: |
+          mkdir -p release-images
+          docker buildx build --pull --platform linux/amd64 --provenance=false \
+            --tag "$BACKEND_IMAGE:$GITHUB_SHA" \
+            --output type=docker,dest=release-images/backend-image.tar \
+            ./backend
+          docker buildx build --pull --platform linux/amd64 --provenance=false \
+            --tag "$FRONTEND_IMAGE:$GITHUB_SHA" \
+            --output type=docker,dest=release-images/frontend-image.tar \
+            ./frontend
+      - name: Scan backend image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          scan-type: image
+          input: release-images/backend-image.tar
+          scanners: vuln
+          severity: HIGH,CRITICAL
+          format: json
+          output: backend-vulnerabilities.json
+          exit-code: 0
+      - name: Scan frontend image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          skip-setup-trivy: true
+          scan-type: image
+          input: release-images/frontend-image.tar
+          scanners: vuln
+          severity: HIGH,CRITICAL
+          format: json
+          output: frontend-vulnerabilities.json
+          exit-code: 0
+      - name: Enforce container vulnerability policy
+        run: >-
+          python scripts/enforce-trivy-image-policy.py
+          backend-vulnerabilities.json
+          frontend-vulnerabilities.json
+
+  required_gate:
+    name: CI and security gate
+    if: always()
+    needs:
+      - backend
+      - frontend
+      - dependency_security
+      - source_security
+      - sonarqube
+      - container_security
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require every CI and security control
+        env:
+          BACKEND_RESULT: ${{ needs.backend.result }}
+          CONTAINER_RESULT: ${{ needs.container_security.result }}
+          DEPENDENCY_RESULT: ${{ needs.dependency_security.result }}
+          FRONTEND_RESULT: ${{ needs.frontend.result }}
+          SONARQUBE_RESULT: ${{ needs.sonarqube.result }}
+          SOURCE_RESULT: ${{ needs.source_security.result }}
+        run: |
+          failures=0
+          require_success() {
+            local name="$1"
+            local result="$2"
+            if [[ "$result" == "success" ]]; then
+              echo "- :white_check_mark: $name" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "- :x: $name ($result)" >> "$GITHUB_STEP_SUMMARY"
+              failures=$((failures + 1))
+            fi
+          }
+
+          echo "### Required pull request gate" >> "$GITHUB_STEP_SUMMARY"
+          require_success "Backend quality" "$BACKEND_RESULT"
+          require_success "Frontend quality" "$FRONTEND_RESULT"
+          require_success "Dependency security" "$DEPENDENCY_RESULT"
+          require_success "Source and configuration security" "$SOURCE_RESULT"
+          require_success "SonarQube quality gate" "$SONARQUBE_RESULT"
+          require_success "Container security" "$CONTAINER_RESULT"
+
+          if (( failures > 0 )); then
+            echo "$failures required control(s) did not succeed." >&2
+            exit 1
+          fi

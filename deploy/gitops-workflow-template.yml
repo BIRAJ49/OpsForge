@@ -1,4 +1,4 @@
-name: Validate GitOps deployment
+name: Validate GitOps production state
 
 on:
   pull_request:
@@ -8,6 +8,8 @@ on:
 
 permissions:
   contents: read
+  attestations: read # Verify provenance created by the trusted release workflow.
+  packages: read # Resolve the digest-pinned GHCR images during verification.
 
 concurrency:
   group: gitops-validation-${{ github.event.pull_request.number || github.ref }}
@@ -15,34 +17,48 @@ concurrency:
 
 jobs:
   validate:
-    name: Render GitOps manifests
+    name: Render and scan manifests
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
       - name: Render production manifests
         run: |
-          kubectl kustomize production >/tmp/opsforge-applications.yaml
-          kubectl kustomize production/opsforge >/tmp/opsforge-workloads.yaml
-      - name: Require immutable OpsForge images
+          kubectl kustomize production > /tmp/applications.yaml
+          kubectl kustomize production/opsforge > /tmp/workloads.yaml
+      - name: Verify production image provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          set -euo pipefail
-
           mapfile -t images < <(
             grep -Eo 'ghcr\.io/biraj49/opsforge-(backend|frontend)@sha256:[0-9a-f]{64}' \
-              /tmp/opsforge-workloads.yaml \
+              /tmp/workloads.yaml \
               | sort -u
           )
           if [[ "${#images[@]}" -ne 2 ]]; then
-            echo "Expected exactly two digest-pinned OpsForge images, found ${#images[@]}." >&2
+            echo "Expected exactly two unique OpsForge images, found ${#images[@]}." >&2
             exit 1
           fi
-          for component in backend frontend; do
-            if ! printf '%s\n' "${images[@]}" \
-              | grep -Eq "^ghcr\\.io/biraj49/opsforge-${component}@sha256:[0-9a-f]{64}$"; then
-              echo "Missing digest-pinned $component image." >&2
+          for expected in backend frontend; do
+            image=$(printf '%s\n' "${images[@]}" | grep -E "^ghcr\\.io/biraj49/opsforge-${expected}@sha256:[0-9a-f]{64}$" || true)
+            if [[ -z "$image" ]]; then
+              echo "Missing digest-pinned $expected image." >&2
               exit 1
             fi
+            gh attestation verify "oci://$image" \
+              --repo BIRAJ49/OpsForge \
+              --signer-workflow BIRAJ49/OpsForge/.github/workflows/build.yml \
+              --source-ref refs/heads/main \
+              --deny-self-hosted-runners
           done
+      - name: Scan Kubernetes configuration
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: production
+          scanners: misconfig,secret
+          trivyignores: .trivyignore.yaml
+          severity: HIGH,CRITICAL
+          exit-code: 1

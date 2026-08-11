@@ -1,0 +1,6 @@
+misconfigurations:
+  - id: KSV-0109
+    paths:
+      - opsforge/configmap.yaml
+    statement: Token expiration settings are durations, not credentials or secret material.
+    expired_at: 2027-08-06

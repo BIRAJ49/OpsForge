@@ -28,6 +28,7 @@ find "$destination" -name '*.bak' -delete
 cp "$source_root/scripts/update-images.py" "$destination/scripts/update-images.py"
 cp "$source_root/deploy/bootstrap/argocd-root-gitops.yaml" "$destination/argocd-root.yaml"
 cp "$source_root/deploy/gitops-workflow-template.yml" "$destination/.github/workflows/validate.yml"
+cp "$source_root/deploy/gitops-trivyignore.yaml" "$destination/.trivyignore.yaml"
 
 (
   cd "$destination"
