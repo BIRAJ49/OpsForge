@@ -47,11 +47,19 @@ The application workflow runs credential-free Trivy IaC checks over Terraform an
 
 ## Objectives And Limits
 
-- PostgreSQL backup RPO: 24 hours or better.
-- Documented rebuild RTO: 2 hours.
-- This environment has one EC2 node, local-path volumes, and no automatic AZ failover.
-- A node or AZ failure causes downtime until recovery.
+- PostgreSQL logical-backup RPO: 6 hours; retained-EBS RPO: 24 hours.
+- Documented service-rebuild RTO objective: 2 hours, measured quarterly.
+- This environment has one EC2 node, one Availability Zone, local-path
+  volumes, and no automatic failover.
+- A larger instance improves capacity, not availability. A node or AZ failure
+  causes downtime until recovery.
+- An attached EBS volume is constrained to the instance's Availability Zone;
+  recovery elsewhere creates a new volume from an AWS Backup recovery point.
 - The future HA path is EKS across multiple AZs, RDS Multi-AZ, ElastiCache, and object-backed observability.
+
+The backup, cross-Region copy, restore-drill, and staging-first activation
+requirements are defined in `single-node-k3s-operations.md`. This platform must
+be described as cost-constrained and non-HA until the future HA path is built.
 
 ## Required Repository Configuration
 
