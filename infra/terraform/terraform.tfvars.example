@@ -1,19 +1,36 @@
-aws_region          = "us-east-1"
-environment         = "production"
-instance_type       = "m7i-flex.large"
-root_volume_size    = 50
-ssh_public_key_path = "~/.ssh/opsforge-gitops.pub"
-ssh_allowed_cidr    = "203.0.113.10/32"
+aws_region                  = "us-east-1"
+disaster_recovery_region    = "us-west-2"
+environment                 = "production"
+ubuntu_ami_id               = "ami-052355af2a014bd2c"
+instance_type               = "m7i.2xlarge"
+root_volume_size            = 50
+data_volume_size            = 300
+k3s_version                 = "v1.35.7+k3s1"
+k3s_sha256                  = "5fc25309c53031e0cf03f7ee85f6f60969381ff3649039ffda19e30f5c26947a"
+aws_cli_version             = "2.36.20"
+aws_cli_zip_sha256          = "59bdfab4035b0251a0c8de801abe01928861a89e27433bb80fc3fcf6dfe32352"
+postgres_backup_image_revision = "sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777"
+ssh_public_key_path         = "~/.ssh/opsforge-gitops.pub"
+ssh_allowed_cidr            = "203.0.113.10/32"
+enable_ssh_access           = false
+monthly_budget_usd          = 450
+ebs_backup_retention_days   = 35
+dr_ebs_backup_retention_days = 90
 
 domain_name        = "opsforge.example.com"
 cloudflare_zone_id = "0123456789abcdef0123456789abcdef"
 enable_admin_access = false
 budget_alert_email   = "owner@example.com"
 
+# Leave blank until backups and the migration plan in README.md are verified.
+# Terraform intentionally refuses to plan/apply the new storage layout without it.
+single_node_cutover_acknowledgement = ""
+
 # Required only after enabling protected Grafana and Argo CD endpoints.
 # cloudflare_account_id       = "0123456789abcdef0123456789abcdef"
 # cloudflare_access_email     = "owner@example.com"
 # cloudflare_github_idp_id    = "replace-with-idp-id"
 
-# Keep true until `aws ssm start-session` succeeds, then set false.
-enable_ssh_access = true
+# If you intentionally set a budget below the conservative estimate, document
+# the pricing review and then set this true.
+acknowledge_budget_below_estimate = false

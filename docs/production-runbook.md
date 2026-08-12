@@ -5,6 +5,11 @@
 > Use `OpsForge-GitOps/docs/operations.md` for the new-cluster bootstrap or
 > non-cascading Argo ownership handoff. Never apply the legacy and canonical
 > roots concurrently.
+>
+> For the retained-EBS single-node target, use
+> `single-node-k3s-operations.md` for the backup contract, read-only readiness
+> check, isolated restore drill, and staging-first production gate. The target
+> is explicitly non-HA.
 
 ## Safe Rollout Order
 
